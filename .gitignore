@@ -1,0 +1,54 @@
+# Secrets and credentials — never commit anything matching these.
+# See SECURITY.md for the full policy. This file is a backstop, not a
+# strategy. Use age-encrypted files (*.age) for secrets that must live
+# in the repo.
+
+# --- SSH / GPG / TLS private keys ---
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+id_ed25519_sk
+*_rsa
+*_dsa
+*_ed25519
+*.pem
+*.key
+*.pfx
+*.p12
+*.kbx
+*.gpg
+*.asc
+
+# --- Environment files ---
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# --- Common credential files written by tools ---
+.netrc
+.pgpass
+.aws/credentials
+.docker/config.json
+.kube/config
+
+# --- VNC password hash (treat as sensitive) ---
+.vnc/passwd
+
+# --- Patterns to catch sloppy naming ---
+*.secret
+*.secrets
+secrets
+credentials.json
+*.password
+
+# --- Backups / dumps that often contain sensitive data ---
+*.dump
+*.sql
+*.bak
+
+# --- OS scratch ---
+.DS_Store
+Thumbs.db
