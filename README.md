@@ -7,7 +7,7 @@ deploy from a fresh install, quick recover after a wipe.
 
 | Setup | Target | What it does |
 |---|---|---|
-| [pixel10-avf/](pixel10-avf/) | Pixel 10, Android 16, AVF Linux Terminal | Debian VM + XFCE + dual TigerVNC sessions + Input Leap for a Pixel-primary, iPad-secondary display |
+| [pixel10-avf/](pixel10-avf/) | Pixel 10, Android 16, AVF Linux Terminal | Headless Debian VM accessed over SSH via Tailscale |
 
 ## Conventions
 
