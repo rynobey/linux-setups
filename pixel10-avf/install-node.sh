@@ -12,7 +12,10 @@
 # and `nvm install --lts` is itself a no-op when the latest LTS is
 # already current.
 
-set -euo pipefail
+# Note: deliberately no `-u`. nvm's shell code references unset
+# variables internally (e.g. nvm.sh:3885 PROVIDED_VERSION), so sourcing
+# it or calling `nvm use` under nounset aborts the script.
+set -eo pipefail
 
 NVM_VERSION="${NVM_VERSION:-v0.40.1}"
 NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
