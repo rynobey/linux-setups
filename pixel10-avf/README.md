@@ -158,30 +158,37 @@ A few practical patterns:
   shared folder under `/mnt/shared` in the VM bridges to Android's
   `/storage/emulated/0/AVF/` if you need a physical-storage hand-off.
 
-## Step 4 — Optional: install `sesh`
+## Step 4 — Install dev tools (sesh + Node)
 
-If you want your tmux session manager (`sesh` + `scroll` +
-`nvim-columns`) on this VM:
+Single entry point that installs everything in one go:
 
 ```bash
 ssh <user>@pixel-avf
 cd ~/pixel10-avf       # wherever you put this repo
-./install-sesh.sh
+./setup.sh
 ```
 
-What it does:
+What it does (in order):
 
-- Installs `git` if missing
-- Verifies SSH-to-GitHub works (prints clear setup instructions if it
-  doesn't — generate `ssh-keygen -t ed25519` and add to GitHub)
-- Clones `git@github.com:rynobey/sesh.git` to `~/projects/sesh`
-  (override with `SESH_DIR` env var)
-- Runs `sesh/install.sh`, which apt-installs `tmux`, `vifm`,
-  `ripgrep`, `xclip`, `glow`, etc. — see the sesh README for the
-  full list
+1. **git + sesh** via [`install-sesh.sh`](install-sesh.sh)
+   - Installs `git` if missing
+   - Verifies SSH-to-GitHub works (prints clear setup instructions if
+     it doesn't — generate `ssh-keygen -t ed25519` and add to GitHub)
+   - Clones `git@github.com:rynobey/sesh.git` to `~/projects/sesh`
+     (override with `SESH_DIR` env var)
+   - Runs `sesh/install.sh`, which apt-installs `tmux`, `vifm`,
+     `ripgrep`, `xclip`, `glow`, etc. — see the sesh README for the
+     full list
+2. **nvm + latest Node LTS** via [`install-node.sh`](install-node.sh)
+   - Installs nvm (pinned version, overridable via `NVM_VERSION`)
+   - `nvm install --lts`, set as default; `npm` ships with Node
 
-Re-run safe (`./install-sesh.sh` again pulls latest and re-runs the
-project installer). Pass `--force` to overwrite user configs.
+Re-run safe (`./setup.sh` again pulls sesh latest, re-runs its
+installer, and is a no-op for nvm/Node if already current). Pass
+`--force` to overwrite user configs (forwarded to sesh's installer).
+
+The two helper scripts can also be run individually if you only want
+one half — see their headers for details.
 
 ## Notes
 
