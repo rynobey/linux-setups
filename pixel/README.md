@@ -1,245 +1,102 @@
-# Pixel 10 AVF Linux — headless SSH setup
+# Pixel 10 — hybrid dev environment
 
-Sets up a Debian Linux environment on a Pixel 10 using Android's built-in
-**Linux Terminal** (AVF / crosvm), accessed exclusively over SSH from a
-laptop, desktop, or Android-side terminal app (Termux, Termius, etc.) via
-Tailscale.
+A real Linux dev box on a Pixel 10 (Android 16), splitting work across
+**two AVF-backed VMs** to get both maximum compute power *and*
+hardware-accelerated graphics:
 
-No VNC, no GUI, no extended-display nonsense. Just a real Debian box that
-happens to live on a phone.
+| Side | What it does | Where |
+|---|---|---|
+| **Podroid + Ubuntu LXC** | headless compute — Docker, sesh, dev tools, sshd | [`podroid/`](podroid/) |
+| **Stock Linux Terminal** | GPU-accelerated GUI host — sway tiling WM + foot + browser | [`stock-terminal/`](stock-terminal/) |
 
-## What you get
+Both run on the same Pixel via the **Android Virtualization Framework
+(AVF / pKVM)** — near-native CPU speed, no software emulation. They
+talk to each other (and your laptop) over Tailscale.
 
-- Debian (currently trixie) running in a VM via AVF
-- Reachable from any device on your tailnet at `pixel-avf:22`
-- Key-only SSH, no inbound LAN exposure, no AVF port forwarding
-- Optional non-default user (`create-user.sh`)
+## Architecture
 
-## Prerequisites
-
-- Pixel 10 running Android 16
-- Developer options enabled (Settings → About phone → tap Build number 7×)
-- Tailscale set up on your laptop / iPad / other devices already (so
-  there's a tailnet to join). Free tier is fine.
-
-## Step 1 — Enable the Linux Terminal in Android
-
-1. Settings → System → Developer options
-2. Find "Linux development environment" (or "Linux terminal") and enable it
-3. Open the **Terminal** app that appears in your launcher
-4. Tap to boot the VM. First boot downloads the Debian image
-   (a few hundred MB).
-5. When ready, you'll land at a `droid@localhost:~$` shell.
-
-> **Disk size:** on current Pixel 10 / Android 16 builds the VM's root
-> filesystem is generously sized (~200 GB, shared with the phone's
-> internal storage) — no pre-boot resize needed. Verify with `df -h`.
-
-## Step 2 — Bootstrap SSH access via Tailscale
-
-The Pixel's on-screen keyboard is only used for this short bootstrap;
-everything else runs over SSH. Tailscale handles the networking so you
-don't need AVF port forwarding.
-
-> **Heads-up:** the AVF Terminal app on current Pixel 10 builds has **no
-> clipboard access** — you can't paste a public key in. The flow below
-> avoids paste by using `ssh-copy-id` from your laptop after a one-time
-> password-auth window.
-
-### 2a — (Optional) Create your own user
-
-The AVF default user is `droid`. You can keep using it, or create one
-matching your preferred username:
-
-```bash
-sudo useradd -m -s /bin/bash <username>
-sudo usermod -aG sudo <username>
-sudo passwd <username>            # set its password
-su - <username>                   # switch into it for everything below
+```
+                                  ┌────────────────────────────┐
+                                  │  Laptop (Tailscale)        │
+                                  └─────────────┬──────────────┘
+                                                │ ssh <user>@pixel-dev (Tailscale MagicDNS)
+                                                ▼
+ ┌──────────────────────────────────────────────────────────────────────┐
+ │                            PIXEL 10                                  │
+ │                                                                      │
+ │  ┌─────────────────────────┐                ┌──────────────────────┐ │
+ │  │ Stock Terminal app      │   ssh (LAN /   │ Podroid app          │ │
+ │  │ (Debian VM, has GPU)    │   Tailscale)   │ (Alpine VM, AVF/pKVM)│ │
+ │  │                         │ ─────────────► │  └─ privileged LXC   │ │
+ │  │ - virglrenderer flag    │                │     'dev' (Ubuntu)   │ │
+ │  │   (zink Vulkan 1.3) ✔   │                │     ├─ sshd          │ │
+ │  │ - sway + foot + firefox │                │     ├─ Docker        │ │
+ │  │ - external monitor      │                │     ├─ sesh + nvim   │ │
+ │  │   via Android 16        │                │     ├─ nvm + Node    │ │
+ │  │   Desktop Mode          │                │     ├─ Tailscale     │ │
+ │  └─────────────────────────┘                │     └─ authorized    │ │
+ │                                             │        pubkeys/      │ │
+ │                                             └──────────────────────┘ │
+ └──────────────────────────────────────────────────────────────────────┘
 ```
 
-The new user **must be in the `sudo` group** — the rest of this setup
-relies on sudo for apt and systemctl. Root login is left disabled by
-design; use `sudo` (or `sudo -i` for an interactive root shell) instead.
+The Stock Terminal does **not** forward X11 from the LXC. The split is
+much cleaner than that:
 
-Anywhere this README says `<user>`, substitute whichever you're using
-(`droid` or the new one).
+- **All GUI apps run inside the Stock Terminal Debian itself** —
+  natively, with full Tensor GPU acceleration via Zink/Vulkan.
+- **The LXC stays headless.** You SSH into it from a foot terminal
+  inside sway, and do all your compute / Docker / coding there.
+- **Sway, foot, firefox** live on the GUI side because they need the
+  GPU; **Docker, dev tools, sesh, project code** live on the LXC side
+  because that's the persistent dev environment.
 
-Once the repo is on the VM (Step 3 onward), you can also use
-[`create-user.sh`](create-user.sh) — an interactive wrapper that
-validates the username, prompts for sudo membership and shell, and sets
-the password.
+## Bootstrap order (fresh device)
 
-### 2b — Install sshd, enable password auth temporarily, set a password
+1. **Stock Terminal — one-time hardware accel enable.**
+   See [`stock-terminal/README.md`](stock-terminal/README.md). Pair
+   ADB (or use Termux), `touch /sdcard/linux/virglrenderer`, cold-boot
+   the Terminal app, verify with `glxinfo | grep renderer` →
+   `zink Vulkan 1.3`.
 
-```bash
-# Set/refresh the password on the current user
-passwd
+2. **Podroid — install the APK, enable AVF backend.**
+   See [`podroid/README.md`](podroid/README.md) Step 1.
 
-sudo apt update
-sudo apt install -y openssh-server curl
+3. **Create the Ubuntu LXC** on the Alpine host inside Podroid:
+   `./podroid/01-create-lxc.sh`.
 
-# Allow password auth just long enough to copy our key over
-sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' \
-    /etc/ssh/sshd_config
-sudo systemctl enable --now ssh
-sudo systemctl restart ssh
-```
+4. **Bootstrap SSH access into the LXC** (curl-able, doesn't need git):
+   inside the LXC: `curl -fsSL <repo>/bootstrap-ssh.sh | bash`. After
+   this, your laptop (whose pubkey is in `pubkeys/`) can SSH in.
 
-### 2c — Install Tailscale and join your tailnet
+5. **Bootstrap git on the LXC** (so the LXC can also clone/push):
+   `bash <(curl -fsSL <repo>/bootstrap-git.sh)` — generates the LXC's
+   own key, walks you through adding it to GitHub, clones this repo.
 
-```bash
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up
-```
+6. **Run the LXC orchestrator** from the cloned repo:
+   `./podroid/02-bootstrap-lxc.sh` — installs Docker, Tailscale, sesh,
+   nvm/Node, creates your user, authorizes pubkeys, hardens sshd.
 
-If the auth URL the command prints isn't tappable in the terminal,
-pre-generate an **auth key** at
-[login.tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys)
-and use it instead:
+7. **GUI side** on the Stock Terminal:
+   `./stock-terminal/install-gui.sh` (sway + foot + firefox), then
+   `./stock-terminal/connect-dev.sh` to drop into a foot terminal
+   pre-SSH'd into the LXC.
 
-```bash
-sudo tailscale up --auth-key=tskey-auth-...
-```
+## Why this split
 
-Rename the device to `pixel-avf` in the admin console
-([login.tailscale.com/admin/machines](https://login.tailscale.com/admin/machines))
-so MagicDNS gives you a memorable hostname.
+| Concern | Decision | Why |
+|---|---|---|
+| Compute base distro | Ubuntu (in LXC) — glibc | Stock Debian VM is too thin to live in; Ubuntu in LXC gets full glibc + Docker compatibility |
+| CPU virtualization | both VMs on AVF (pKVM) | near-native speed; software emulation (QEMU TCG) is 10–100× slower |
+| GPU | Stock Terminal only | Podroid (user-space app) can't reach `/dev/mali`; Stock Terminal is a privileged system component that can |
+| LXC priv level | **privileged** | Single-user personal box. Saves fighting fuse-overlayfs (Docker) and TUN-passthrough (Tailscale). Container escape lands on Alpine host — itself sandboxed by AVF — so the blast radius is bounded |
+| Network | Tailscale **inside the LXC** | One hop, MagicDNS, works on/off Wi-Fi. Laptop reaches `ssh <user>@pixel-dev` directly |
+| WM | sway (in Stock Terminal) | Native Wayland; Stock Terminal's display is Wayland-backed by Zink → smoothest path. Avoids any X11/SSH-forwarding fragility |
+| Persistence | bind-mount `/mnt/shared/projects/` into LXC | Survives Podroid app wipes; `tar` backups of `/var/lib/lxc/dev/` land on the same shared dir |
 
-### 2d — From the laptop: copy your key over and verify
+## Useful pointers
 
-Your laptop needs to be on the same tailnet (install Tailscale there too
-if you haven't). Then:
-
-```bash
-ssh-copy-id <user>@pixel-avf
-# Enter the password from step 2b. Pubkey lands in authorized_keys.
-
-ssh <user>@pixel-avf
-# Should log in *without* prompting for a password.
-```
-
-### 2e — Disable password auth
-
-With key-based login confirmed, lock SSH down to keys only. From your
-laptop's SSH session:
-
-```bash
-sudo sed -i 's/^PasswordAuthentication.*/PasswordAuthentication no/' \
-    /etc/ssh/sshd_config
-sudo systemctl restart ssh
-exit
-ssh <user>@pixel-avf    # reconnect to verify key-only login still works
-```
-
-You're done with the phone keyboard.
-
-## Step 3 — Day-to-day
-
-```bash
-ssh <user>@pixel-avf
-# from here, it's a regular Debian box. apt, systemd, tmux, whatever.
-```
-
-A few practical patterns:
-
-- **Persistent sessions** — use `tmux` or `screen` so work survives
-  reconnects and intermittent phone connectivity:
-  ```bash
-  sudo apt install -y tmux
-  tmux new -s main
-  # later, from anywhere on the tailnet:
-  ssh <user>@pixel-avf -t tmux attach -t main
-  ```
-- **From the Pixel itself** — use Termux or any Android SSH client app
-  (Termius, JuiceSSH, ConnectBot). They all reach `pixel-avf:22` over
-  the tailnet the same way your laptop does.
-- **File transfer** — `scp` or `rsync -avh` work normally. The Android
-  shared folder under `/mnt/shared` in the VM bridges to Android's
-  `/storage/emulated/0/AVF/` if you need a physical-storage hand-off.
-
-## Step 4 — Install dev tools (sesh + Node)
-
-Single entry point that installs everything in one go:
-
-```bash
-ssh <user>@pixel-avf
-cd ~/pixel10-avf       # wherever you put this repo
-./setup.sh
-```
-
-What it does (in order):
-
-1. **git + sesh** via [`install-sesh.sh`](install-sesh.sh)
-   - Installs `git` if missing
-   - Verifies SSH-to-GitHub works (prints clear setup instructions if
-     it doesn't — generate `ssh-keygen -t ed25519` and add to GitHub)
-   - Clones `git@github.com:rynobey/sesh.git` to `~/projects/sesh`
-     (override with `SESH_DIR` env var)
-   - Runs `sesh/install.sh`, which apt-installs `tmux`, `vifm`,
-     `ripgrep`, `xclip`, `glow`, etc. — see the sesh README for the
-     full list
-2. **nvm + latest Node LTS** via [`install-node.sh`](install-node.sh)
-   - Installs nvm (pinned version, overridable via `NVM_VERSION`)
-   - `nvm install --lts`, set as default; `npm` ships with Node
-
-Re-run safe (`./setup.sh` again pulls sesh latest, re-runs its
-installer, and is a no-op for nvm/Node if already current). Pass
-`--force` to overwrite user configs (forwarded to sesh's installer).
-
-The two helper scripts can also be run individually if you only want
-one half — see their headers for details.
-
-## Notes
-
-### Backups
-
-The AVF VM image lives in the Terminal app's private storage and is
-**not accessible from Android** without root. Back up from inside the
-VM:
-
-```bash
-sudo apt install -y restic rclone
-# set up restic with a remote (B2, S3, your NAS over Tailscale, etc.)
-# schedule with a systemd timer
-```
-
-Clearing the Terminal app's data in Android Settings will destroy the
-entire VM with no recovery. Off-device backups aren't optional.
-
-### Termux ↔ AVF
-
-Both can coexist. Termux is good for quick Android-side shell tasks; the
-AVF VM is your real Linux environment. Bridge them by putting both on
-Tailscale — then from Termux: `ssh <user>@pixel-avf` works the same as
-from anywhere else.
-
-### Why headless and not the AVF Display feature
-
-The AVF Terminal app has a built-in graphical Display feature, and we
-explored it earlier — it works (Weston + kiosk-shell + Xwayland +
-X11-backend-forced) but has rough edges (software rendering only,
-compositing bugs, lazy surface allocation). For the headless use case
-documented here it's irrelevant; the GUI experiments are kept out of the
-default flow for simplicity.
-
-### Resetting the VM
-
-Worst case, if you want a fully clean slate: Android Settings → Apps →
-Terminal → **Clear storage**. This destroys the VM image and Tailscale
-state. Next launch of the Terminal app re-creates a fresh Debian. Do
-backups first.
-
-### Cleanup of earlier VNC / GUI experiments
-
-If you went through an earlier VNC or Input Leap setup on this VM and
-want to strip those artifacts without nuking the whole VM, run
-[`cleanup-vnc-attempt.sh`](cleanup-vnc-attempt.sh) on the VM. It's
-interactive (asks `[y/n]` per category) and covers:
-
-- stopping cursor-bridge / VNC processes
-- removing `~/bin/{vnc-start,vnc-stop,orient,route-*,cursor-bridge}`
-- cleaning Input Leap source build + `/usr/local/bin` installs
-- removing VNC / XFCE / Input Leap dotfiles
-- removing stale apt sources from the failed input-leap search
-- optionally purging the GUI packages (xfce4, tigervnc-*, lightdm, etc.)
+- [`../bootstrap-ssh.sh`](../bootstrap-ssh.sh) — curl-able SSH bootstrap (any fresh Linux)
+- [`../bootstrap-git.sh`](../bootstrap-git.sh) — curl-able git+ssh-key bootstrap (any fresh Linux)
+- [`../pubkeys/`](../pubkeys/) — public keys authorized for SSH access; drop a new `.pub`, re-run `bootstrap-ssh.sh` or `podroid/authorize-pubkeys.sh`
+- [`../SECURITY.md`](../SECURITY.md) — secrets policy for this repo

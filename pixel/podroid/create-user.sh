@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Interactive script to create a new user inside the AVF Debian VM.
-# Target: pixel10-avf — see README.md in this directory.
+# Interactive script to create a new user inside the Podroid Ubuntu LXC.
+# See README.md in this directory for the broader bootstrap flow.
 #
 # Prompts for username, sudo membership, and shell. Sets a password via
 # the standard `passwd` flow (no plaintext on disk, no echo).
@@ -51,13 +51,13 @@ while true; do
 done
 
 # --- Sudo membership ---
-# Recommended: the pixel10-avf setup uses sudo throughout (apt, systemctl,
-# port forwarding). Root login is disabled by design; sudo is the way in.
+# Recommended: bootstrap-lxc and the per-tool installers all need sudo
+# (apt, systemctl, docker/tailscale daemons).
 GRANT_SUDO=1
 read -rp "Grant sudo privileges? [Y/n] " choice
 case "$choice" in
     n|N) GRANT_SUDO=0
-         warn "Without sudo, this user can't run the pixel10-avf setup script."
+         warn "Without sudo, this user can't run 02-bootstrap-lxc.sh."
          ;;
 esac
 
@@ -100,7 +100,8 @@ User '$USERNAME' created.
 Switch to this user now with:
   su - $USERNAME
 
-If you're bootstrapping SSH for this user, continue from Step 2b
-of the pixel10-avf README as $USERNAME.
+Next: from this user's shell, run bootstrap-ssh.sh then
+bootstrap-git.sh to authorize laptop access and set up the
+device's own GitHub identity. See the parent README.md.
 ==============================================================
 EOF
