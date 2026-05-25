@@ -37,6 +37,39 @@ log()  { printf '\033[1;34m[restore]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; }
 
+# See the matching block in backup.sh for the rationale — long
+# extract/decrypt ops trigger Android's LMK against Podroid, taking
+# the whole Alpine VM down mid-restore. Wrapping in tmux protects
+# against SSH disconnects; the README documents the full mitigation
+# stack.
+warn_not_in_tmux() {
+    [ -n "${TMUX:-}" ] && return
+    [ "${SKIP_TMUX_CHECK:-0}" = 1 ] && return
+    cat <<'EOF' >&2
+
+⚠  Not running inside tmux.
+
+Long backup/restore ops have been observed to die mid-flight when
+Android's LMK reaps Podroid under memory pressure (taking the whole
+Alpine VM with it). For multi-GB tarballs you almost certainly want:
+
+  1. Run from Podroid's own terminal app (on the phone), not over SSH
+  2. Plug the phone in to charge
+  3. Keep the screen on (Settings → Developer options → Stay awake)
+  4. Settings → Apps → Podroid → Battery → Unrestricted
+  5. Wrap this command in tmux:  apk add tmux && tmux new -s restore './restore.sh ...'
+
+Set SKIP_TMUX_CHECK=1 to suppress this prompt next time.
+EOF
+    if [ -r /dev/tty ]; then
+        read -r -p "Continue anyway? [y/N] " ok < /dev/tty
+        case "$ok" in y|Y|yes) ;; *) err "aborted"; exit 1 ;; esac
+    else
+        err "no terminal to confirm on; export SKIP_TMUX_CHECK=1 if you really mean it"
+        exit 1
+    fi
+}
+
 # ---- args ------------------------------------------------------------------
 PICK_LATEST=0
 LIST_ONLY=0
@@ -114,6 +147,9 @@ case "$BACKUP_FILE" in
     *.tar.gz)     ENCRYPTED=0 ;;
     *) err "unrecognised backup extension"; exit 1 ;;
 esac
+
+# ---- tmux / Android-LMK warning -------------------------------------------
+warn_not_in_tmux
 
 # ---- confirm --------------------------------------------------------------
 if sudo lxc-info -n "$LXC_NAME" -s &>/dev/null; then

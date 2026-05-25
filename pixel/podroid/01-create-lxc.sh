@@ -41,6 +41,14 @@ if [ ! -d /var/lib/lxc ] && ! command -v lxc-create >/dev/null 2>&1; then
     sudo apk add --no-cache lxc lxc-templates lxc-download bridge ca-certificates curl
 fi
 
+# tmux on the Alpine host — backup.sh and restore.sh recommend running
+# inside it (long-running ops get killed by Android's LMK when Podroid
+# is backgrounded, taking the whole VM with them).
+if ! command -v tmux >/dev/null 2>&1; then
+    log "installing tmux on the Alpine host (for safe backup/restore sessions)"
+    sudo apk add --no-cache tmux
+fi
+
 # ---- if container already exists, just print state and exit ---------------
 if [ -d "/var/lib/lxc/${LXC_NAME}" ]; then
     log "LXC '${LXC_NAME}' already exists at /var/lib/lxc/${LXC_NAME}"

@@ -40,6 +40,41 @@ log()  { printf '\033[1;34m[backup]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; }
 
+# Backups of a multi-GB rootfs take long enough for Android's Low-Memory
+# Killer to reap Podroid while it's backgrounded — which kills the
+# whole Alpine VM, the tmux session, and any SSH connection running
+# in it. Running inside tmux protects against the SSH disconnect; the
+# other items (screen on, charge, unrestricted battery, run from
+# Podroid's own terminal) are what protect against Podroid itself
+# being killed. See pixel/podroid/README.md for the full checklist.
+warn_not_in_tmux() {
+    [ -n "${TMUX:-}" ] && return  # already in tmux, all good
+    [ "${SKIP_TMUX_CHECK:-0}" = 1 ] && return
+    cat <<'EOF' >&2
+
+⚠  Not running inside tmux.
+
+Long backup/restore ops have been observed to die mid-flight when
+Android's LMK reaps Podroid under memory pressure (taking the whole
+Alpine VM with it). For multi-GB tarballs you almost certainly want:
+
+  1. Run from Podroid's own terminal app (on the phone), not over SSH
+  2. Plug the phone in to charge
+  3. Keep the screen on (Settings → Developer options → Stay awake)
+  4. Settings → Apps → Podroid → Battery → Unrestricted
+  5. Wrap this command in tmux:  apk add tmux && tmux new -s backup './backup.sh ...'
+
+Set SKIP_TMUX_CHECK=1 to suppress this prompt next time.
+EOF
+    if [ -r /dev/tty ]; then
+        read -r -p "Continue anyway? [y/N] " ok < /dev/tty
+        case "$ok" in y|Y|yes) ;; *) err "aborted"; exit 1 ;; esac
+    else
+        err "no terminal to confirm on; export SKIP_TMUX_CHECK=1 if you really mean it"
+        exit 1
+    fi
+}
+
 # ---- args ------------------------------------------------------------------
 MODE=backup
 ENCRYPT=1
@@ -96,6 +131,8 @@ if [ "$MODE" = list ]; then
 fi
 
 # ---- backup mode -----------------------------------------------------------
+warn_not_in_tmux
+
 if [ ! -d "/var/lib/lxc/${LXC_NAME}" ]; then
     err "LXC '${LXC_NAME}' not found at /var/lib/lxc/${LXC_NAME}"
     exit 1

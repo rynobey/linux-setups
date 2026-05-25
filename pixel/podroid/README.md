@@ -199,7 +199,7 @@ wipe or full uninstall (and a re-install of your patched APK, etc).
 
 Encrypted backups use [`age`](https://github.com/FiloSottile/age) with
 passphrase mode (scrypt KDF, ChaCha20-Poly1305). The script prompts
-you for a passphrase and writes a `dev-<timestamp>.tar.gz.age` file.
+you for a passphrase and writes a `pubuntu-<timestamp>.tar.gz.age` file.
 Remember the passphrase — there's no way to recover the backup
 without it. The script auto-installs `age` on Alpine via `apk add`
 if it's missing.
@@ -207,6 +207,58 @@ if it's missing.
 Each invocation creates a new timestamped file, so multiple snapshots
 accumulate. Prune the directory manually when you want to reclaim
 space.
+
+### Running backups/restores safely (Android can kill them)
+
+Long backup/restore operations have an awkward failure mode on
+Podroid: while Podroid is backgrounded (you switch apps, lock the
+phone), Android's Low-Memory Killer can decide the multi-GB
+allocation pressure of the age-decrypt + tar-extract makes Podroid
+expendable. When it gets reaped, the whole Alpine VM goes with it —
+your tmux session, your SSH session, your in-flight restore. The
+symptom matches reality: the SSH client disconnects, Tailscale on
+Android might crash, and sometimes the Pixel even briefly shows
+"no network" on the lock screen.
+
+Mitigations (apply all of them for restore; for small backups, just
+the first one is usually enough):
+
+1. **Wrap the command in tmux** on the Alpine host:
+   ```sh
+   tmux new -s restore './pixel/podroid/restore.sh --latest'
+   ```
+   `tmux` is installed by `01-create-lxc.sh`. The script also warns
+   if you're running outside tmux and prompts before proceeding;
+   set `SKIP_TMUX_CHECK=1` to silence it.
+
+2. **Run from Podroid's own terminal app on the phone**, not via
+   SSH from your laptop. Removes the SSH-disconnect failure mode
+   entirely — if Android kills Podroid you can just relaunch and
+   `tmux attach -t restore` (the session survives Podroid restarts
+   as long as the Alpine VM image itself stays intact).
+
+3. **Keep the screen on and plug in to charge.** Lock screen makes
+   Android more aggressive about reclaiming background apps.
+   *Settings → System → Developer options → Stay awake* keeps the
+   display alive while charging.
+
+4. **Mark Podroid as battery-unrestricted.** *Settings → Apps →
+   Podroid → Battery → Unrestricted*. Also turn off "Pause app
+   activity if unused" on the same screen.
+
+5. **Close other heavy apps** (Chrome, Maps, browsers in general)
+   before kicking off the restore. Less foreground RAM = less LMK
+   pressure on background apps.
+
+6. **Disable Android's phantom-process killer** (once, persists):
+   ```sh
+   adb shell device_config put activity_manager max_phantom_processes 2147483647
+   adb shell settings put global settings_enable_monitor_phantom_procs false
+   ```
+
+If a restore *still* gets killed, peek at LMK activity with
+`adb shell dumpsys activity processes | grep -A3 podroid` — climbing
+`oom_adj` values right before the kill confirm Android did it.
 
 ### Restoring
 
