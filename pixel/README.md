@@ -65,19 +65,32 @@ much cleaner than that:
 3. **Create the Ubuntu LXC** on the Alpine host inside Podroid:
    `./podroid/01-create-lxc.sh`.
 
-4. **Bootstrap SSH access into the LXC** (curl-able, doesn't need git):
-   inside the LXC: `curl -fsSL <repo>/bootstrap-ssh.sh | bash`. After
-   this, your laptop (whose pubkey is in `pubkeys/`) can SSH in.
+4. **Create a non-root sudo user** inside the LXC. `lxc-attach` lands
+   you as root, but everything from here runs as a regular user so
+   pubkeys / SSH / git / docker-group land on the right account.
+   See [`podroid/README.md`](podroid/README.md) Step 3 for the
+   curl-able `create-user.sh` invocation.
 
-5. **Bootstrap git on the LXC** (so the LXC can also clone/push):
-   `bash <(curl -fsSL <repo>/bootstrap-git.sh)` — generates the LXC's
+5. **Bootstrap SSH access** as that user:
+   `curl -fsSL <repo>/bootstrap-ssh.sh | bash`. Your laptop (whose
+   pubkey is in `pubkeys/`) can now SSH in.
+
+6. **Bootstrap git** as that user (so the LXC can also clone/push):
+   `curl -fsSL <repo>/bootstrap-git.sh | bash` — generates the LXC's
    own key, walks you through adding it to GitHub, clones this repo.
+   (Use `bootstrap-git-public.sh` instead if you only need read access.)
 
-6. **Run the LXC orchestrator** from the cloned repo:
-   `./podroid/02-bootstrap-lxc.sh` — installs Docker, Tailscale, sesh,
-   nvm/Node, creates your user, authorizes pubkeys, hardens sshd.
+7. **Run the LXC orchestrator** from the cloned repo:
+   `./podroid/02-bootstrap-lxc.sh` — authorizes the rest of `pubkeys/`,
+   installs Docker, sesh, nvm/Node. (Tailscale is intentionally split
+   out — see next step.)
 
-7. **GUI side** on the Stock Terminal:
+8. **Install Tailscale** as the final LXC step:
+   `./podroid/03-install-tailscale.sh`. `tailscale up` drops the
+   current SSH/lxc-attach session, so it has to be last. Reconnect
+   afterwards via `ssh <user>@pixel-dev` (MagicDNS).
+
+9. **GUI side** on the Stock Terminal:
    `./stock-terminal/install-gui.sh` (sway + foot + firefox), then
    `./stock-terminal/connect-dev.sh` to drop into a foot terminal
    pre-SSH'd into the LXC.

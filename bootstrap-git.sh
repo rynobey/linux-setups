@@ -4,10 +4,12 @@
 # linux-setups repo via SSH so this device can also push.
 #
 # Run interactively (needs a controlling terminal for the GitHub-paste
-# pause). If using curl|bash, redirect stdin from /dev/tty:
+# pause). The GitHub-pubkey-paste prompt reads from /dev/tty so curl|bash
+# works on systems where process substitution doesn't (e.g. minimal Alpine):
 #   curl -fsSL https://raw.githubusercontent.com/rynobey/linux-setups/master/bootstrap-git.sh | bash
-# or, more reliably:
-#   bash <(curl -fsSL https://raw.githubusercontent.com/rynobey/linux-setups/master/bootstrap-git.sh)
+# If that prompt is unhappy, download the file first and run it directly:
+#   curl -fsSL https://raw.githubusercontent.com/rynobey/linux-setups/master/bootstrap-git.sh -o bootstrap-git.sh
+#   bash bootstrap-git.sh
 #
 # Env overrides:
 #   LINUX_SETUPS_DIR  default: ~/projects/linux-setups
@@ -35,7 +37,7 @@ prompt() {
     elif [ -r /dev/tty ]; then
         read -r -p "$msg" < /dev/tty
     else
-        err "no terminal available for prompt — run 'bash <(curl ...)' instead of 'curl ... | bash'"
+        err "no terminal available for prompt — download the script first: curl -o bootstrap-git.sh ... && bash bootstrap-git.sh"
         exit 1
     fi
 }

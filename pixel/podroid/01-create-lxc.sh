@@ -88,7 +88,24 @@ lxc.mount.entry = /dev/net dev/net none bind,create=dir 0 0
 # ${SHARED_HOST}/ on the Alpine host (and equivalently /sdcard/... on
 # Android) survive LXC destruction and Podroid app wipes.
 lxc.mount.entry = ${SHARED_HOST} ${SHARED_GUEST} none bind,create=dir 0 0
+
+# Auto-start when Alpine host (Podroid's VM) boots. Podroid restarts
+# the VM frequently — letting LXC come back up unattended saves a
+# manual 'lxc-start -n dev' every time.
+lxc.start.auto = 1
+lxc.start.delay = 0
 EOF
+
+# Make sure Alpine's lxc service is in the default runlevel so the
+# auto-start config above actually fires on boot. Both checks below
+# are idempotent — 'rc-update add' silently no-ops if already added.
+if command -v rc-update >/dev/null 2>&1; then
+    log "enabling lxc service at boot (rc-update add lxc default)"
+    sudo rc-update add lxc default >/dev/null 2>&1 || true
+else
+    warn "no rc-update found — Alpine host doesn't look like OpenRC."
+    warn "you'll need to enable the lxc service manually for auto-start."
+fi
 
 # ---- start ----------------------------------------------------------------
 log "starting LXC '${LXC_NAME}'"
@@ -111,7 +128,7 @@ Next:
        (authorizes laptop pubkeys so you can ssh in)
 
   3. Then from your laptop's ssh session into the LXC:
-         bash <(curl -fsSL https://raw.githubusercontent.com/rynobey/linux-setups/master/bootstrap-git.sh)
+         curl -fsSL https://raw.githubusercontent.com/rynobey/linux-setups/master/bootstrap-git.sh | bash
        (installs git, sets up the LXC's own GitHub key, clones this repo)
 
   4. Finally, from the cloned repo inside the LXC:
