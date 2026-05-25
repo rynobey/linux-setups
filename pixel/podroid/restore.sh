@@ -156,16 +156,66 @@ if sudo lxc-info -n "$LXC_NAME" -s &>/dev/null; then
     fi
 fi
 
-# ---- stream (age) → tar -xz ------------------------------------------------
-log "restoring into /var/lib/lxc/"
+# ---- stream (age) → tar -xz, with on-the-fly rename if needed --------------
+#
+# We extract into a staging dir under /var/lib/lxc/ rather than straight
+# into /var/lib/lxc/. Two reasons:
+#   1. The tarball's top-level dir is whatever the LXC was *originally*
+#      called (e.g. "dev"). If the user is restoring it under a
+#      different LXC_NAME ("pubuntu"), we need to rename the dir and
+#      patch lxc.uts.name / /etc/hostname / /etc/hosts before bringing
+#      it up — otherwise lxc-start can't find the container and the
+#      in-container shell prompt is still the old name.
+#   2. /var/lib/lxc/ is on the same filesystem as the staging dir, so
+#      the final `mv` is instant (no extra disk overhead beyond the
+#      single extracted rootfs).
+staging="/var/lib/lxc/.restore-staging-$$"
+sudo mkdir -p "$staging"
+trap 'sudo rm -rf "$staging" 2>/dev/null || true' EXIT
+
+log "restoring into staging dir"
 if [ "$ENCRYPTED" -eq 1 ]; then
     log "passphrase prompt incoming"
-    # age writes to stdout; tar reads from stdin. sudo on tar so the
-    # extracted rootfs lands with root ownership.
-    age -d "$BACKUP_FILE" | sudo tar -xzpf - -C /var/lib/lxc/
+    age -d "$BACKUP_FILE" | sudo tar -xzpf - -C "$staging"
 else
-    sudo tar -xzpf "$BACKUP_FILE" -C /var/lib/lxc/
+    sudo tar -xzpf "$BACKUP_FILE" -C "$staging"
 fi
+
+# Identify the LXC dir inside the tarball.
+shopt -s nullglob
+staged_dirs=("$staging"/*/)
+shopt -u nullglob
+if [ "${#staged_dirs[@]}" -ne 1 ]; then
+    err "expected exactly one top-level LXC dir in the tarball, found ${#staged_dirs[@]}"
+    exit 1
+fi
+staged="${staged_dirs[0]%/}"
+original_name="$(basename "$staged")"
+log "tarball contained LXC '$original_name'"
+
+# If we're restoring under a different name, patch the bits of state
+# that bake the name in. Best-effort on the rootfs files — missing
+# /etc/hosts or /etc/hostname inside the rootfs aren't fatal, the LXC
+# will still start.
+if [ "$original_name" != "$LXC_NAME" ]; then
+    log "renaming on restore: '$original_name' → '${LXC_NAME}'"
+    config="$staged/config"
+    if [ -f "$config" ]; then
+        sudo sed -i -E "s|^([[:space:]]*lxc\.uts\.name[[:space:]]*=).*|\1 ${LXC_NAME}|" "$config"
+        sudo sed -i "s|/var/lib/lxc/${original_name}/|/var/lib/lxc/${LXC_NAME}/|g" "$config"
+    fi
+    if [ -f "$staged/rootfs/etc/hostname" ]; then
+        echo "${LXC_NAME}" | sudo tee "$staged/rootfs/etc/hostname" >/dev/null
+    fi
+    if [ -f "$staged/rootfs/etc/hosts" ]; then
+        sudo sed -i "s|^\(127\.0\.1\.1[[:space:]]\+\)${original_name}\b|\1${LXC_NAME}|" "$staged/rootfs/etc/hosts"
+    fi
+fi
+
+# Move into final location.
+sudo mv "$staged" "/var/lib/lxc/${LXC_NAME}"
+sudo rm -rf "$staging"
+trap - EXIT
 
 # ---- start ----------------------------------------------------------------
 log "starting restored '${LXC_NAME}'"
