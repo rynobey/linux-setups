@@ -84,17 +84,30 @@ err()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; }
 
 SSH=(ssh -p "$DEV_PORT" -o ConnectTimeout=10 "${DEV_USER}@${DEV_HOST}")
 
-# Pick the right scp flags. Alpine doesn't ship openssh-sftp-server
-# by default, and modern scp defaults to SFTP protocol. The -O flag
-# forces the legacy SCP protocol which works without sftp-server.
-# Probe once, cache the answer.
+# Pick the right scp flags. Alpine's openssh package is split:
+#   - openssh-sftp-server (provides sftp-server, used by modern scp)
+#   - openssh-client (provides scp, used by legacy `scp -O`)
+# Neither is installed by default by `apk add openssh`. So we probe:
+#   1. If sftp-server is present, use modern scp (no -O needed)
+#   2. Else if scp is present on the remote, use -O legacy
+#   3. Else, install openssh-sftp-server (apk add) and use modern scp
 probe_scp() {
-    if "${SSH[@]}" 'test -x /usr/libexec/sftp-server || test -x /usr/lib/ssh/sftp-server' 2>/dev/null; then
+    if "${SSH[@]}" 'test -x /usr/libexec/sftp-server || test -x /usr/lib/ssh/sftp-server || test -x /usr/libexec/openssh/sftp-server' 2>/dev/null; then
         SCP=(scp -P "$DEV_PORT")
-    else
+        return
+    fi
+    if "${SSH[@]}" 'command -v scp >/dev/null' 2>/dev/null; then
         log "no sftp-server on Alpine — using legacy SCP protocol (-O)"
         SCP=(scp -O -P "$DEV_PORT")
+        return
     fi
+    log "neither sftp-server nor scp on Alpine — installing openssh-sftp-server"
+    if ! "${SSH[@]}" 'command -v apk >/dev/null && apk add --no-cache openssh-sftp-server' 2>&1; then
+        err "failed to install openssh-sftp-server on the remote"
+        err "install it manually: ssh ${DEV_USER}@${DEV_HOST} -p ${DEV_PORT} 'apk add openssh-sftp-server'"
+        exit 1
+    fi
+    SCP=(scp -P "$DEV_PORT")
 }
 
 case "$MODE" in
@@ -135,7 +148,9 @@ case "$MODE" in
                 fi
             fi
             log "fetch: $base"
-            if "${SCP[@]}" "${DEV_USER}@${DEV_HOST}:${remote}" "$LOCAL_DIR/" >/dev/null; then
+            # No output redirection — let scp's native progress meter
+            # (percent / bytes / speed / ETA) reach the terminal.
+            if "${SCP[@]}" "${DEV_USER}@${DEV_HOST}:${remote}" "$LOCAL_DIR/"; then
                 pulled=$((pulled + 1))
                 if [ "$DELETE_AFTER" -eq 1 ]; then
                     "${SSH[@]}" "rm -f ${remote}"
@@ -170,7 +185,8 @@ case "$MODE" in
         for f in "${locals[@]}"; do
             base="$(basename "$f")"
             log "send: $base"
-            if "${SCP[@]}" "$f" "${DEV_USER}@${DEV_HOST}:${REMOTE_DIR}/" >/dev/null; then
+            # No output redirection — see corresponding comment in pull.
+            if "${SCP[@]}" "$f" "${DEV_USER}@${DEV_HOST}:${REMOTE_DIR}/"; then
                 pushed=$((pushed + 1))
             else
                 warn "    failed to push $base"

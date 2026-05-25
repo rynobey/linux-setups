@@ -51,6 +51,24 @@ need_install=()
 command -v sshd >/dev/null 2>&1 || need_install+=(openssh-server)
 command -v curl >/dev/null 2>&1 || need_install+=(curl)
 command -v tar  >/dev/null 2>&1 || need_install+=(tar)
+
+# On Alpine, openssh-server doesn't bundle sftp-server or scp — they
+# ship as separate apk packages. Without them, modern scp from a
+# laptop fails ("sh: scp: not found") and even the legacy -O fallback
+# can't work. Install both proactively on Alpine; on Debian/Ubuntu the
+# openssh-server package already includes both, so this is a no-op
+# there (apt installs are idempotent).
+if [ "$PKG_FAMILY" = apk ]; then
+    if ! [ -x /usr/lib/ssh/sftp-server ]; then
+        need_install+=(openssh-sftp-server)
+    fi
+    if ! command -v scp >/dev/null 2>&1; then
+        # openssh-client gives Alpine the `scp` and `ssh` commands;
+        # the daemon's openssh-server doesn't include them.
+        need_install+=(openssh-client)
+    fi
+fi
+
 if [ "${#need_install[@]}" -gt 0 ]; then
     log "installing: ${need_install[*]}"
     pkg_install "${need_install[@]}"

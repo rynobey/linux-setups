@@ -81,16 +81,28 @@ err()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; }
 
 SSH=(ssh -p "$DEV_PORT" -o ConnectTimeout=10 "${DEV_USER}@${DEV_HOST}")
 
-# Pick the right scp flags. Stock Terminal Debian may not have
-# openssh-sftp-server installed. The -O flag forces the legacy SCP
-# protocol which works without sftp-server.
+# Pick the right scp flags. On Debian, sftp-server ships as part of
+# openssh-server (path /usr/lib/openssh/sftp-server). If for some
+# reason it's not there, we fall back to -O (legacy SCP), which needs
+# `scp` on the remote. If neither is present, install openssh-server
+# (which bundles both) and retry.
 probe_scp() {
     if "${SSH[@]}" 'test -x /usr/libexec/sftp-server || test -x /usr/lib/sftp-server || test -x /usr/lib/openssh/sftp-server' 2>/dev/null; then
         SCP=(scp -P "$DEV_PORT")
-    else
+        return
+    fi
+    if "${SSH[@]}" 'command -v scp >/dev/null' 2>/dev/null; then
         log "no sftp-server on VM — using legacy SCP protocol (-O)"
         SCP=(scp -O -P "$DEV_PORT")
+        return
     fi
+    log "neither sftp-server nor scp on VM — installing openssh-server"
+    if ! "${SSH[@]}" 'command -v apt-get >/dev/null && sudo apt-get install -y openssh-server' 2>&1; then
+        err "failed to install openssh-server on the remote"
+        err "install it manually: ssh ${DEV_USER}@${DEV_HOST} -p ${DEV_PORT} 'sudo apt install -y openssh-server'"
+        exit 1
+    fi
+    SCP=(scp -P "$DEV_PORT")
 }
 
 case "$MODE" in
@@ -127,7 +139,9 @@ case "$MODE" in
                 fi
             fi
             log "fetch: $base"
-            if "${SCP[@]}" "${DEV_USER}@${DEV_HOST}:${remote}" "$LOCAL_DIR/" >/dev/null; then
+            # No output redirection — let scp's native progress meter
+            # (percent / bytes / speed / ETA) reach the terminal.
+            if "${SCP[@]}" "${DEV_USER}@${DEV_HOST}:${remote}" "$LOCAL_DIR/"; then
                 pulled=$((pulled + 1))
                 if [ "$DELETE_AFTER" -eq 1 ]; then
                     "${SSH[@]}" "rm -f ${remote}"
@@ -163,7 +177,8 @@ case "$MODE" in
         for f in "${locals[@]}"; do
             base="$(basename "$f")"
             log "send: $base"
-            if "${SCP[@]}" "$f" "${DEV_USER}@${DEV_HOST}:${REMOTE_DIR}/" >/dev/null; then
+            # No output redirection — see corresponding comment in pull.
+            if "${SCP[@]}" "$f" "${DEV_USER}@${DEV_HOST}:${REMOTE_DIR}/"; then
                 pushed=$((pushed + 1))
             else
                 warn "    failed to push $base"
