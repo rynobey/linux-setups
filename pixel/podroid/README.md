@@ -31,54 +31,70 @@ The Stock Terminal side handles GUI / GPU stuff — see
      Installs as `com.excp.podroid.debug` *alongside* the stock one (different
      package, two icons in the launcher).
 
-2. **Grant AVF permissions via ADB.** Required — without these, Podroid
-   silently falls back to QEMU/TCG software emulation (10–100× slower).
-   They're `signature|preinstalled|development` perms that the in-app UI
-   can't grant on its own:
+2. **Pair ADB.** Required so the next step can run. Use either:
+   - **USB cable** — Settings → Developer options → USB debugging → ON;
+     allow the RSA prompt on the phone when you first `adb devices`.
+   - **Wireless** — Settings → Developer options → Wireless debugging
+     → Pair device with pairing code (keep the popup open). Then on
+     your laptop: `adb pair <ip>:<pair-port>` (enter the 6-digit
+     code), then `adb connect <ip>:<conn-port>`. If you don't have
+     a laptop, [Termux](https://termux.dev) on the phone itself can
+     do this (`pkg install android-tools`, then `adb pair` as above
+     but in a split-screen view).
 
-   For the stock build:
+3. **Run `pixel/podroid/adb-setup.sh`** to apply the device-side
+   Podroid config in one go:
+
    ```sh
-   adb shell pm grant com.excp.podroid android.permission.MANAGE_VIRTUAL_MACHINE
-   adb shell pm grant com.excp.podroid android.permission.USE_CUSTOM_VIRTUAL_MACHINE
+   cd ~/projects/linux-setups
+   ./pixel/podroid/adb-setup.sh
    ```
 
-   For the custom debug build (replace package with the `.debug` variant):
+   Idempotent. Does:
+   - Phantom Process Killer disable (system-wide, with the persistent
+     sync-disable flag so Phenotype doesn't quietly revert it)
+   - Podroid AVF permission grants (`MANAGE_VIRTUAL_MACHINE` +
+     `USE_CUSTOM_VIRTUAL_MACHINE`) for both `com.excp.podroid` and
+     `com.excp.podroid.debug` — whichever are installed
+   - Podroid storage `appops` at both package and UID levels
+
+   Re-run after any Podroid reinstall (the `pm grant` permissions
+   are dropped on uninstall, the script silently re-applies them).
+   The Stock Terminal's separate ADB step (hardware acceleration)
+   lives in [`../stock-terminal/adb-setup.sh`](../stock-terminal/adb-setup.sh).
+
+   <details>
+   <summary>Manual fallback commands (if you'd rather not run the script)</summary>
+
    ```sh
+   # AVF gate permissions (replace .debug with no suffix for the stock build):
    adb shell pm grant com.excp.podroid.debug android.permission.MANAGE_VIRTUAL_MACHINE
    adb shell pm grant com.excp.podroid.debug android.permission.USE_CUSTOM_VIRTUAL_MACHINE
-   ```
 
-   These **persist across reboots and in-place updates** but are **lost on
-   uninstall** — re-run them after any reinstall. If you don't have a
-   laptop nearby, [Shizuku](https://shizuku.rikka.app/)'s `rish` shell
-   accepts the same `pm grant ...` commands.
+   # Storage appops:
+   adb shell appops set com.excp.podroid.debug MANAGE_EXTERNAL_STORAGE allow
 
-3. **Suppress Android's Phantom Process Killer.** Not strictly required for
-   AVF, but Android will kill Podroid's QEMU child processes under load
-   without this. Apply once:
-   ```sh
+   # Phantom Process Killer:
    adb shell device_config set_sync_disabled_for_tests persistent
    adb shell device_config put activity_manager max_phantom_processes 2147483647
    adb shell settings put global settings_enable_monitor_phantom_procs false
    ```
-   The `set_sync_disabled_for_tests persistent` line is crucial — without
-   it, Google's Phenotype service re-syncs the original phantom-killer
-   settings from the server within hours, and you start losing the VM
-   again with no obvious cause.
+   </details>
 
 4. Open the app. Pick **Settings → Advanced → Backend → AVF (KVM)** so
    it uses the Pixel's hardware virtualization layer. If AVF doesn't
-   show in the picker, re-check step 2 (perms not granted or wrong
+   show in the picker, re-check step 3 (perms not granted or wrong
    package).
 
 5. Allocate RAM: 8 GB is a reasonable default on a 12 GB Pixel 10 (leaves
    headroom for Android + foreground app). The 6 / 8 GB tiers are only
    present on the custom debug build; stock caps at 4 GB.
 
-6. Settings → **Storage access** → ON. This bind-mounts a shared Android
-   dir (typically `/sdcard/Download/Podroid/`) into the Alpine VM at
-   `/mnt/shared/`. Files written there survive app wipes — backups,
-   recovery tarballs, project source you can't afford to lose.
+6. Settings → **Storage access** → ON. (Note: the AVF SharedPath into
+   `/sdcard/` is silently dropped on current Pixel 10 / Android 16
+   firmware regardless of this toggle and `MANAGE_EXTERNAL_STORAGE` —
+   leaving it on doesn't hurt, and lets things work if a future OS
+   update fixes the underlying AVF bug.)
 
 7. Open Podroid's terminal — you'll land at the Alpine host shell.
 

@@ -38,12 +38,29 @@ exists in Android's shared storage. Without it you get llvmpipe
    adb connect localhost:<MAIN_PORT>   # different port shown on the main page
    ```
 
-2. Create the marker file:
+2. Run `pixel/stock-terminal/adb-setup.sh` from any host with that
+   ADB connection (your laptop, the Termux session you just paired,
+   etc.):
+
+   ```sh
+   ./pixel/stock-terminal/adb-setup.sh
+   ```
+
+   The script touches `/sdcard/linux/virglrenderer` and prints next
+   steps. Idempotent — re-running is harmless.
+
+   <details>
+   <summary>Manual fallback (if you'd rather not run the script)</summary>
 
    ```sh
    adb shell "mkdir -p /sdcard/linux"
    adb shell "touch /sdcard/linux/virglrenderer"
    ```
+   </details>
+
+   The Podroid app has its own separate ADB config (AVF permissions,
+   Phantom Process Killer disable, storage appops) — see
+   [`../podroid/adb-setup.sh`](../podroid/adb-setup.sh) for that.
 
 3. Force-stop both `Android Virtualization Framework` and `Terminal`
    in Settings → Apps → See all apps (enable "Show system" from the
