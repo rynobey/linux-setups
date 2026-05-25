@@ -114,19 +114,22 @@ cd ~/projects/linux-setups
 ./pixel/podroid/02-bootstrap-lxc.sh
 ```
 
-This walks through five sub-steps:
+This walks through six sub-steps:
 
 | Step | Script | What it does | Skip env |
 |---|---|---|---|
 | 1 | (inline) | apt update + base tools | — |
 | 2 | [`authorize-pubkeys.sh`](authorize-pubkeys.sh) | append `pubkeys/*.pub` to `~/.ssh/authorized_keys` | `SKIP_PUBKEYS=1` |
 | 3 | [`install-docker.sh`](install-docker.sh) | official get-docker.sh + add `$USER` to docker group | `SKIP_DOCKER=1` |
-| 4 | [`install-sesh.sh`](install-sesh.sh) | clone rynobey/sesh, run its installer | `SKIP_SESH=1` |
-| 5 | [`install-node.sh`](install-node.sh) | nvm + Node LTS | `SKIP_NODE=1` |
+| 4 | [`install-toolchains.sh`](install-toolchains.sh) | `build-essential` (gcc/g++/make), `golang-go`, `pkg-config` | `SKIP_TOOLCHAINS=1` |
+| 5 | [`install-sesh.sh`](install-sesh.sh) | clone rynobey/sesh, run its installer | `SKIP_SESH=1` |
+| 6 | [`install-node.sh`](install-node.sh) | nvm + Node LTS | `SKIP_NODE=1` |
 
 After this completes:
 
 - Docker works (`docker run --rm hello-world`).
+- `gcc`, `make`, `go`, `pkg-config` are on PATH (build anything that
+  compiles natively or via cgo).
 - `sesh` is on PATH; first run sets up `~/.config/sesh/`.
 - `nvm`, `node`, `npm` are on PATH after a new shell.
 

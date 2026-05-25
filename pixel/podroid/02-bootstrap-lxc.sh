@@ -18,8 +18,9 @@
 #   1. apt update + base build tools
 #   2. authorize-pubkeys.sh           (skip with SKIP_PUBKEYS=1)
 #   3. install-docker.sh              (skip with SKIP_DOCKER=1)
-#   4. install-sesh.sh                (skip with SKIP_SESH=1)
-#   5. install-node.sh                (skip with SKIP_NODE=1)
+#   4. install-toolchains.sh          (skip with SKIP_TOOLCHAINS=1)
+#   5. install-sesh.sh                (skip with SKIP_SESH=1)
+#   6. install-node.sh                (skip with SKIP_NODE=1)
 #
 # create-user.sh is NOT run here — it should be invoked once, manually,
 # before this script (so you're already running this as the right user).
@@ -39,40 +40,48 @@ if [ -f /etc/alpine-release ]; then
 fi
 
 # ---- 1. base apt setup -----------------------------------------------------
-log "[1/5] updating apt + installing base tools"
+log "[1/6] updating apt + installing base tools"
 sudo apt-get update -y
 sudo apt-get install -y curl ca-certificates gnupg openssh-server sudo
 
 # ---- 2. authorize pubkeys --------------------------------------------------
 if [ -z "${SKIP_PUBKEYS:-}" ]; then
-    log "[2/5] authorizing pubkeys"
+    log "[2/6] authorizing pubkeys"
     "$SCRIPT_DIR/authorize-pubkeys.sh"
 else
-    log "[2/5] skipped (SKIP_PUBKEYS=1)"
+    log "[2/6] skipped (SKIP_PUBKEYS=1)"
 fi
 
 # ---- 3. docker -------------------------------------------------------------
 if [ -z "${SKIP_DOCKER:-}" ]; then
-    log "[3/5] installing docker"
+    log "[3/6] installing docker"
     "$SCRIPT_DIR/install-docker.sh"
 else
-    log "[3/5] skipped (SKIP_DOCKER=1)"
+    log "[3/6] skipped (SKIP_DOCKER=1)"
 fi
 
-# ---- 4. sesh ---------------------------------------------------------------
+# ---- 4. build toolchains (C compiler, Go, pkg-config) ----------------------
+if [ -z "${SKIP_TOOLCHAINS:-}" ]; then
+    log "[4/6] installing build toolchains (build-essential, golang-go, pkg-config)"
+    "$SCRIPT_DIR/install-toolchains.sh"
+else
+    log "[4/6] skipped (SKIP_TOOLCHAINS=1)"
+fi
+
+# ---- 5. sesh ---------------------------------------------------------------
 if [ -z "${SKIP_SESH:-}" ]; then
-    log "[4/5] installing sesh + scroll + nvim"
+    log "[5/6] installing sesh + scroll + nvim"
     "$SCRIPT_DIR/install-sesh.sh"
 else
-    log "[4/5] skipped (SKIP_SESH=1)"
+    log "[5/6] skipped (SKIP_SESH=1)"
 fi
 
-# ---- 5. nvm + node ---------------------------------------------------------
+# ---- 6. nvm + node ---------------------------------------------------------
 if [ -z "${SKIP_NODE:-}" ]; then
-    log "[5/5] installing nvm + Node LTS"
+    log "[6/6] installing nvm + Node LTS"
     "$SCRIPT_DIR/install-node.sh"
 else
-    log "[5/5] skipped (SKIP_NODE=1)"
+    log "[6/6] skipped (SKIP_NODE=1)"
 fi
 
 log "all done."

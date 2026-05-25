@@ -122,6 +122,73 @@ Defaults to `$USER@pubuntu`; override via `DEV_USER` / `DEV_HOST` env
 or `--host` flag. Bound to `Mod + Shift + Return` in the shipped sway
 config.
 
+## Backup / restore
+
+The Stock Terminal VM disk image lives in app-private storage
+(`/data/user/0/com.android.virtualization.terminal/files/`), unreachable
+without root. So unlike `pixel/podroid/backup.sh` (which tars the whole
+LXC rootfs from outside), the Stock Terminal scripts run **inside the
+VM itself** and tar **selected paths** to the shared mount.
+
+### What's preserved
+
+| ✔ Kept | ✘ Lost |
+|---|---|
+| `$HOME` + `/root` (dotfiles, sway/foot configs, projects) | The rest of the rootfs (system tweaks outside the named paths) |
+| `/etc/sway`, `/etc/foot`, `/etc/cloud` | `/var` data (logs, apt cache, etc.) |
+| `/usr/local/bin` (the installed `connect-dev`) | Custom systemd units (not in default paths — add to `BACKUP_PATHS`) |
+| List of apt-installed packages (replayed on restore) | The packages' on-disk state — only the names are kept |
+
+Tune the paths with the `BACKUP_PATHS` env (space-separated). The
+default is `$HOME /root /etc/sway /etc/foot /etc/cloud /usr/local/bin`.
+
+### Make a backup
+
+```sh
+# inside the Stock Terminal VM:
+./pixel/stock-terminal/backup.sh                # encrypted (age -p), default
+./pixel/stock-terminal/backup.sh --plain        # unencrypted .tar.gz
+./pixel/stock-terminal/backup.sh --list         # show existing
+```
+
+Backups land in `/mnt/shared/terminal-backups/` as
+`terminal-<timestamp>.tar.gz.age`. The `age` package is installed
+on demand. Multiple snapshots accumulate; prune manually.
+
+### Restore
+
+```sh
+./pixel/stock-terminal/restore.sh                       # interactive picker
+./pixel/stock-terminal/restore.sh --latest              # newest, no prompt
+./pixel/stock-terminal/restore.sh <path-to-tarball>     # specific file
+./pixel/stock-terminal/restore.sh --skip-packages       # untar only, no apt replay
+```
+
+Restore does two things:
+
+1. Untars the snapshot into `/`, overwriting current files in the
+   backed-up paths.
+2. Re-runs `apt-get` to install everything in the saved package list.
+
+Cleanest results on a freshly-installed Stock Terminal VM. Restoring
+over a heavily-customised existing VM works but only the explicitly
+backed-up paths get overwritten — leftover system changes outside
+those paths stay.
+
+Encrypted backups re-prompt for the passphrase used at backup time.
+
+### What survives a Stock Terminal data wipe / phone reset
+
+The backup dir is under `/sdcard/Download/.../Terminal/` (visible to
+Android's Files app), which sits outside the app sandbox. So:
+
+- Backups survive: Stock Terminal "Clear data", Terminal app
+  uninstall, GH Actions-installed APK swaps
+- Backups don't survive: full Android factory reset (wipes `/sdcard/`),
+  manual deletion via the Files app, phone replacement
+- For paranoia, periodically `adb pull /sdcard/Download/.../Terminal/terminal-backups/`
+  to your laptop
+
 ## Why not run sway *inside* the LXC and forward to here?
 
 You could `ssh -Y` sway-or-i3 from the LXC and render its X clients on
