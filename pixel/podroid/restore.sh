@@ -234,6 +234,32 @@ log "tarball contained LXC '$original_name'"
 # /etc/hosts or /etc/hostname inside the rootfs aren't fatal, the LXC
 # will still start.
 if [ "$original_name" != "$LXC_NAME" ]; then
+    # First — handle the orphan-LXC case: a previous failed restore
+    # (or any other path) left /var/lib/lxc/<original_name>/ on the
+    # host. Leaving it there is a footgun: both LXCs auto-start, both
+    # have the same Tailscale identity (from the same backup), and the
+    # tailnet routes SSH to whichever one pinged last. Prompt to nuke
+    # it before we proceed, so the user ends up with exactly one LXC
+    # named LXC_NAME and nothing else.
+    if [ -d "/var/lib/lxc/${original_name}" ]; then
+        warn "an existing LXC at /var/lib/lxc/${original_name}/ would conflict"
+        warn "with this restore (same Tailscale identity, both auto-start)."
+        if sudo lxc-info -n "$original_name" -s 2>/dev/null | grep -q RUNNING; then
+            warn "it is currently RUNNING."
+        fi
+        read -rp "destroy /var/lib/lxc/${original_name}/ now? [y/N] " orphan_ok < /dev/tty
+        case "$orphan_ok" in
+            y|Y|yes)
+                log "destroying orphan LXC '${original_name}'"
+                sudo lxc-stop -n "$original_name" 2>/dev/null || true
+                sudo lxc-destroy -n "$original_name"
+                ;;
+            *)
+                warn "leaving orphan in place — expect Tailscale flip-flopping until you destroy it"
+                ;;
+        esac
+    fi
+
     log "renaming on restore: '$original_name' → '${LXC_NAME}'"
     config="$staged/config"
     if [ -f "$config" ]; then
@@ -246,6 +272,22 @@ if [ "$original_name" != "$LXC_NAME" ]; then
     if [ -f "$staged/rootfs/etc/hosts" ]; then
         sudo sed -i "s|^\(127\.0\.1\.1[[:space:]]\+\)${original_name}\b|\1${LXC_NAME}|" "$staged/rootfs/etc/hosts"
     fi
+    # Ubuntu's LXC image runs cloud-init on every boot, and its
+    # update_hostname module will silently re-set /etc/hostname back to
+    # the cached value (the *original* LXC name from the backup) — so
+    # without this, the shell prompt reverts on the next restart.
+    # Two-pronged defence:
+    #   1. Drop a cloud.cfg.d snippet telling cloud-init to leave the
+    #      hostname alone forever.
+    #   2. Wipe the cached instance state so any first-boot logic that
+    #      reads from there doesn't replay the old name regardless.
+    if [ -d "$staged/rootfs/etc/cloud" ]; then
+        sudo mkdir -p "$staged/rootfs/etc/cloud/cloud.cfg.d"
+        echo 'preserve_hostname: true' | sudo tee \
+            "$staged/rootfs/etc/cloud/cloud.cfg.d/99-preserve-hostname.cfg" >/dev/null
+    fi
+    sudo rm -rf "$staged/rootfs/var/lib/cloud/instance" \
+                "$staged/rootfs/var/lib/cloud/instances" 2>/dev/null || true
 fi
 
 # Move into final location.
