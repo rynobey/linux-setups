@@ -9,7 +9,7 @@ acceleration.
 Compute lives in [`../podroid/`](../podroid/) — Docker, code, sesh, all
 in the Ubuntu LXC. **The Stock Terminal does not run any of that.** Its
 only job is to host the GUI: sway (Wayland tiling WM), foot (terminal),
-firefox (browser). From inside sway you `ssh user@pixel-dev` over
+firefox (browser). From inside sway you `ssh user@pubuntu` over
 Tailscale into the LXC for actual work.
 
 ## Step 1 — Enable hardware acceleration (one-time)
@@ -99,7 +99,7 @@ The Stock Terminal window switches to the sway session. Keybinds:
 | Key | Action |
 |---|---|
 | `Mod + Return` | new local foot terminal |
-| `Mod + Shift + Return` | new foot terminal already ssh'd into pixel-dev (LXC) |
+| `Mod + Shift + Return` | new foot terminal already ssh'd into pubuntu (LXC) |
 | `Mod + d` | dmenu (or `Mod + space` depending on default) |
 | `Mod + h/v` | next window splits horizontal/vertical |
 | `Mod + f` | full-screen current window |
@@ -113,12 +113,12 @@ Terminal sway window scales to the monitor's resolution.
 ## `connect-dev.sh` quick reference
 
 ```sh
-./connect-dev.sh              # opens foot, ssh user@pixel-dev
+./connect-dev.sh              # opens foot, ssh user@pubuntu
 ./connect-dev.sh --host alt   # ssh user@alt instead
 DEV_USER=other ./connect-dev.sh
 ```
 
-Defaults to `$USER@pixel-dev`; override via `DEV_USER` / `DEV_HOST` env
+Defaults to `$USER@pubuntu`; override via `DEV_USER` / `DEV_HOST` env
 or `--host` flag. Bound to `Mod + Shift + Return` in the shipped sway
 config.
 

@@ -8,9 +8,9 @@
 # end as a deliberate final step.
 #
 # Prereqs:
-#   - 01-create-lxc.sh has already created and started the 'dev' LXC
+#   - 01-create-lxc.sh has already created and started the 'pubuntu' LXC
 #     on the Alpine host
-#   - You are attached into the LXC (sudo lxc-attach -n dev) OR ssh'd
+#   - You are attached into the LXC (sudo lxc-attach -n pubuntu) OR ssh'd
 #     into it after bootstrap-ssh.sh authorized your laptop's key
 #   - This repo is cloned (run ../../bootstrap-git.sh if not)
 #

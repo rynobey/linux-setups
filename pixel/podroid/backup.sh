@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Snapshot the 'dev' LXC to an encrypted tarball on the shared Android
-# storage. Runs ON THE ALPINE HOST inside Podroid, NOT inside the LXC.
+# Snapshot the 'pubuntu' LXC to an encrypted tarball on the shared
+# Android storage. Runs ON THE ALPINE HOST inside Podroid, NOT inside
+# the LXC.
 #
 # Backups land under SHARED_HOST/podroid-backups/ (default /mnt/shared/
 # podroid-backups/), which Podroid maps to /sdcard/Download/Podroid/
@@ -17,20 +18,20 @@
 # encryption (the tarball is then just .tar.gz, no extension change).
 #
 # Usage:
-#   ./backup.sh                  # snapshot 'dev' LXC, prompt for passphrase
+#   ./backup.sh                  # snapshot 'pubuntu' LXC, prompt for passphrase
 #   ./backup.sh --plain          # unencrypted .tar.gz (no passphrase)
 #   ./backup.sh --list           # list existing backups
 #   LXC_NAME=foo ./backup.sh     # snapshot a different LXC
 #
 # Env overrides:
-#   LXC_NAME       default: dev
+#   LXC_NAME       default: pubuntu
 #   SHARED_HOST    default: /mnt/shared
 #   BACKUP_DIR     default: ${SHARED_HOST}/podroid-backups
 #   BACKUP_PREFIX  default: ${LXC_NAME}
 
 set -euo pipefail
 
-LXC_NAME="${LXC_NAME:-dev}"
+LXC_NAME="${LXC_NAME:-pubuntu}"
 SHARED_HOST="${SHARED_HOST:-/mnt/shared}"
 BACKUP_DIR="${BACKUP_DIR:-${SHARED_HOST}/podroid-backups}"
 BACKUP_PREFIX="${BACKUP_PREFIX:-${LXC_NAME}}"
@@ -74,17 +75,23 @@ if [ "$MODE" = list ]; then
         log "no backups yet (dir $BACKUP_DIR doesn't exist)"
         exit 0
     fi
+    # Capture into a string first instead of using `< <(...)`, which
+    # needs /dev/fd/<N> to be valid — not the case in minimal Alpine
+    # environments like Podroid's host VM.
+    files=$(find "$BACKUP_DIR" -maxdepth 1 -type f \
+        \( -name '*.tar.gz' -o -name '*.tar.gz.age' \) 2>/dev/null | sort -r)
     log "backups in $BACKUP_DIR:"
-    # Sort newest-first, show size + age. Both encrypted (.age) and
-    # plain (.tar.gz) shown.
-    found=0
-    while IFS= read -r f; do
-        size=$(du -h "$f" 2>/dev/null | awk '{print $1}')
-        ts=$(stat -c '%y' "$f" 2>/dev/null | cut -d. -f1)
-        printf '  %-40s  %6s  %s\n' "$(basename "$f")" "$size" "$ts"
-        found=$((found + 1))
-    done < <(find "$BACKUP_DIR" -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.tar.gz.age' \) 2>/dev/null | sort -r)
-    [ "$found" -eq 0 ] && log "(none)"
+    if [ -z "$files" ]; then
+        log "(none)"
+    else
+        # Sort newest-first, show size + age. Both encrypted (.age) and
+        # plain (.tar.gz) shown.
+        while IFS= read -r f; do
+            size=$(du -h "$f" 2>/dev/null | awk '{print $1}')
+            ts=$(stat -c '%y' "$f" 2>/dev/null | cut -d. -f1)
+            printf '  %-40s  %6s  %s\n' "$(basename "$f")" "$size" "$ts"
+        done <<< "$files"
+    fi
     exit 0
 fi
 

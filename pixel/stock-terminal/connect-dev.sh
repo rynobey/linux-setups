@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# Open an SSH session to the Podroid Ubuntu LXC ('pixel-dev' on the
+# Open an SSH session to the Podroid Ubuntu LXC ('pubuntu' on the
 # tailnet by default). Bound to Mod+Shift+Return in the default sway
 # config — run via `foot -e connect-dev`.
 #
 # Usage:
-#   connect-dev                 # ssh $USER@pixel-dev
+#   connect-dev                 # ssh $USER@pubuntu
 #   connect-dev --host alt      # ssh $USER@alt
 #   DEV_USER=other connect-dev  # override the user
 #
 # Env overrides:
 #   DEV_USER   default: $USER
-#   DEV_HOST   default: pixel-dev
+#   DEV_HOST   default: pubuntu
 
 set -euo pipefail
 
 DEV_USER="${DEV_USER:-$USER}"
-DEV_HOST="${DEV_HOST:-pixel-dev}"
+DEV_HOST="${DEV_HOST:-pubuntu}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -25,7 +25,7 @@ while [ $# -gt 0 ]; do
             cat <<EOF
 connect-dev — ssh into the Podroid LXC
 
-  --host <name>   target host (default: pixel-dev)
+  --host <name>   target host (default: pubuntu)
   --user <name>   target user (default: \$USER)
 
 Env: DEV_USER, DEV_HOST

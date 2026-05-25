@@ -46,7 +46,7 @@ On the Alpine host (Podroid's terminal):
 curl -fsSL https://raw.githubusercontent.com/rynobey/linux-setups/master/bootstrap-ssh.sh | bash
 curl -fsSL https://raw.githubusercontent.com/rynobey/linux-setups/master/bootstrap-git-public.sh | bash
 
-# Then create + start the dev LXC:
+# Then create + start the pubuntu LXC:
 cd ~/projects/linux-setups
 ./pixel/podroid/01-create-lxc.sh
 ```
@@ -54,16 +54,16 @@ cd ~/projects/linux-setups
 What this does (see the script header for details):
 - Installs `lxc`, `lxc-templates`, `lxc-download` on Alpine if missing
 - Creates `dev` LXC from the Ubuntu Noble arm64 download template
-- Patches `/var/lib/lxc/dev/config` for: privileged mode, all
+- Patches `/var/lib/lxc/pubuntu/config` for: privileged mode, all
   capabilities, all devices, `/dev/net/tun` for Tailscale, bind-mount
   of `/mnt/shared/` for persistence
 - Starts the container
 
-Then attach: `sudo lxc-attach -n dev`. You're inside Ubuntu.
+Then attach: `sudo lxc-attach -n pubuntu`. You're inside Ubuntu.
 
 ## Step 3 — Create a non-root user
 
-`lxc-attach -n dev` lands you as root. Don't run the rest of the
+`lxc-attach -n pubuntu` lands you as root. Don't run the rest of the
 bootstrap as root — your laptop's pubkey would end up in root's
 `authorized_keys`, and SSH into the LXC would target root by default.
 Create a sudo-capable user first.
@@ -98,7 +98,7 @@ curl -fsSL https://raw.githubusercontent.com/rynobey/linux-setups/master/bootstr
 
 # Optionally: ssh in from your laptop now (assuming Tailscale is up on
 # the LXC — but it isn't yet, so for now do this over LAN or via
-# 'sudo lxc-attach -n dev' from a fresh Podroid terminal session)
+# 'sudo lxc-attach -n pubuntu' from a fresh Podroid terminal session)
 
 # Set up the LXC's own GitHub identity + clone the repo. Use the full
 # bootstrap-git.sh here (not -public) so this LXC can also push:
@@ -150,14 +150,14 @@ TS_AUTHKEY=tskey-auth-... ./pixel/podroid/03-install-tailscale.sh
 ```
 
 Env overrides:
-- `TS_HOSTNAME` — node name on the tailnet (default: `pixel-dev`)
+- `TS_HOSTNAME` — node name on the tailnet (default: `pubuntu`)
 - `TS_AUTHKEY` — pre-generated auth key (default: interactive)
 
 After `tailscale up` succeeds your session drops. Reconnect via
 MagicDNS:
 
 ```sh
-ssh <user>@pixel-dev
+ssh <user>@pubuntu
 ```
 
 Works from any tailnet device, on or off Wi-Fi, no port forwarding.
@@ -176,9 +176,9 @@ Works from any tailnet device, on or off Wi-Fi, no port forwarding.
 enables Alpine's `lxc` service in the default runlevel. So whenever
 Podroid's Alpine VM boots (which happens often — every time you launch
 the app cold), the `dev` LXC comes up unattended. No manual
-`lxc-start -n dev` needed.
+`lxc-start -n pubuntu` needed.
 
-To stop the auto-start: edit `/var/lib/lxc/dev/config` and remove
+To stop the auto-start: edit `/var/lib/lxc/pubuntu/config` and remove
 (or set to 0) the `lxc.start.auto` line.
 
 ## Backup / restore
@@ -217,10 +217,10 @@ space.
 ./pixel/podroid/restore.sh --list             # same as backup.sh --list
 ```
 
-By default the existing `dev` LXC is renamed to `dev-prev-<timestamp>`
+By default the existing `pubuntu` LXC is renamed to `pubuntu-prev-<timestamp>`
 (not deleted) before unpacking, so you can roll back if the restore
 went sideways. Once you've verified the restore worked, clean up the
-preserved copy with `sudo rm -rf /var/lib/lxc/dev-prev-*`. Pass
+preserved copy with `sudo rm -rf /var/lib/lxc/pubuntu-prev-*`. Pass
 `--no-keep-prev` to delete in place instead.
 
 Restoring an encrypted backup re-prompts for the same passphrase used
@@ -249,8 +249,8 @@ host before the restore gives you a clean Alpine baseline.
 Android storage (survives anything)
     /sdcard/Download/Podroid/                       (Podroid's shared dir)
         ├─ podroid-backups/
-        │   ├─ dev-2026-05-25-1530.tar.gz.age       (encrypted snapshots)
-        │   └─ dev-2026-05-26-0945.tar.gz.age
+        │   ├─ pubuntu-2026-05-25-1530.tar.gz.age   (encrypted snapshots)
+        │   └─ pubuntu-2026-05-26-0945.tar.gz.age
         └─ (your project code if you put it here)
             ▲
             │ Podroid maps this in as
@@ -276,7 +276,7 @@ backup. Run `backup.sh` before risky changes to the LXC itself
 ## Troubleshooting
 
 - **`docker info` errors / iptables noise**: check that `01-create-lxc.sh`'s
-  config additions made it into `/var/lib/lxc/dev/config` and the
+  config additions made it into `/var/lib/lxc/pubuntu/config` and the
   container was restarted after. The `lxc.apparmor.profile = unconfined`
   + `lxc.cap.drop =` lines are load-bearing.
 - **`tailscale up` says "tun device not available"**: same root cause —

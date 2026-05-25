@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Restore a 'dev' LXC snapshot produced by backup.sh.
+# Restore a 'pubuntu' LXC snapshot produced by backup.sh.
 #
 # Runs ON THE ALPINE HOST inside Podroid, NOT inside the LXC. Reads
 # backups from /mnt/shared/podroid-backups/ (Android's
@@ -23,13 +23,13 @@
 # outright.
 #
 # Env overrides:
-#   LXC_NAME       default: dev
+#   LXC_NAME       default: pubuntu
 #   SHARED_HOST    default: /mnt/shared
 #   BACKUP_DIR     default: ${SHARED_HOST}/podroid-backups
 
 set -euo pipefail
 
-LXC_NAME="${LXC_NAME:-dev}"
+LXC_NAME="${LXC_NAME:-pubuntu}"
 SHARED_HOST="${SHARED_HOST:-/mnt/shared}"
 BACKUP_DIR="${BACKUP_DIR:-${SHARED_HOST}/podroid-backups}"
 
@@ -54,11 +54,20 @@ while [ $# -gt 0 ]; do
 done
 
 # ---- enumerate backups -----------------------------------------------------
-mapfile -t BACKUPS < <(
-    [ -d "$BACKUP_DIR" ] && \
-        find "$BACKUP_DIR" -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.tar.gz.age' \) 2>/dev/null \
-        | sort -r
-)
+# Use a string + here-string instead of `< <(...)`; process substitution
+# requires /dev/fd/<N>, which isn't reliably set up in Podroid's
+# minimal Alpine host VM.
+if [ -d "$BACKUP_DIR" ]; then
+    backups_str=$(find "$BACKUP_DIR" -maxdepth 1 -type f \
+        \( -name '*.tar.gz' -o -name '*.tar.gz.age' \) 2>/dev/null | sort -r)
+else
+    backups_str=""
+fi
+if [ -n "$backups_str" ]; then
+    mapfile -t BACKUPS <<< "$backups_str"
+else
+    BACKUPS=()
+fi
 
 # ---- list mode (or empty dir) ---------------------------------------------
 if [ "$LIST_ONLY" -eq 1 ] || [ "${#BACKUPS[@]}" -eq 0 ]; then

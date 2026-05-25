@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Create the privileged Ubuntu LXC ('dev') inside Podroid's Alpine host VM.
+# Create the privileged Ubuntu LXC ('pubuntu') inside Podroid's Alpine
+# host VM.
 #
 # This script runs ON THE ALPINE HOST (Podroid's primary terminal), NOT
 # inside the LXC. It only handles the host-side concerns: installing
@@ -7,12 +8,12 @@
 # inside a privileged LXC, downloading the Ubuntu Noble arm64 rootfs,
 # and starting the container.
 #
-# After this completes, run 'lxc-attach -n dev' to drop into the LXC
-# and continue with 02-bootstrap-lxc.sh (and the bootstrap-ssh.sh /
+# After this completes, run 'lxc-attach -n pubuntu' to drop into the
+# LXC and continue with 02-bootstrap-lxc.sh (and the bootstrap-ssh.sh /
 # bootstrap-git.sh curl-ables — see pixel/README.md).
 #
 # Env overrides:
-#   LXC_NAME      default: dev
+#   LXC_NAME      default: pubuntu
 #   LXC_DIST      default: ubuntu
 #   LXC_RELEASE   default: noble
 #   LXC_ARCH      default: arm64
@@ -23,7 +24,7 @@
 
 set -euo pipefail
 
-LXC_NAME="${LXC_NAME:-dev}"
+LXC_NAME="${LXC_NAME:-pubuntu}"
 LXC_DIST="${LXC_DIST:-ubuntu}"
 LXC_RELEASE="${LXC_RELEASE:-noble}"
 LXC_ARCH="${LXC_ARCH:-arm64}"
@@ -89,9 +90,15 @@ lxc.mount.entry = /dev/net dev/net none bind,create=dir 0 0
 # Android) survive LXC destruction and Podroid app wipes.
 lxc.mount.entry = ${SHARED_HOST} ${SHARED_GUEST} none bind,create=dir 0 0
 
+# Make the in-container hostname (what shows up in shell prompts as
+# user@host, what \`hostname\` returns inside the LXC) match the LXC
+# name. The Ubuntu download template already writes /etc/hostname from
+# -n at create time; this is just belt-and-braces for the UTS namespace.
+lxc.uts.name = ${LXC_NAME}
+
 # Auto-start when Alpine host (Podroid's VM) boots. Podroid restarts
 # the VM frequently — letting LXC come back up unattended saves a
-# manual 'lxc-start -n dev' every time.
+# manual 'lxc-start -n ${LXC_NAME}' every time.
 lxc.start.auto = 1
 lxc.start.delay = 0
 EOF

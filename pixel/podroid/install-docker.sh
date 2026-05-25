@@ -10,7 +10,7 @@
 #
 # Prereq: privileged LXC (see 01-create-lxc.sh) — overlay2 + cgroups +
 # iptables manipulation all need the unconfined apparmor profile and
-# the broad device-allow rules in /var/lib/lxc/dev/config.
+# the broad device-allow rules in /var/lib/lxc/pubuntu/config.
 
 set -euo pipefail
 

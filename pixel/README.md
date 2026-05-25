@@ -19,7 +19,7 @@ talk to each other (and your laptop) over Tailscale.
                                   ┌────────────────────────────┐
                                   │  Laptop (Tailscale)        │
                                   └─────────────┬──────────────┘
-                                                │ ssh <user>@pixel-dev (Tailscale MagicDNS)
+                                                │ ssh <user>@pubuntu (Tailscale MagicDNS)
                                                 ▼
  ┌──────────────────────────────────────────────────────────────────────┐
  │                            PIXEL 10                                  │
@@ -28,7 +28,7 @@ talk to each other (and your laptop) over Tailscale.
  │  │ Stock Terminal app      │   ssh (LAN /   │ Podroid app          │ │
  │  │ (Debian VM, has GPU)    │   Tailscale)   │ (Alpine VM, AVF/pKVM)│ │
  │  │                         │ ─────────────► │  └─ privileged LXC   │ │
- │  │ - virglrenderer flag    │                │     'dev' (Ubuntu)   │ │
+ │  │ - virglrenderer flag    │                │     'pubuntu' (Ubuntu)│ │
  │  │   (zink Vulkan 1.3) ✔   │                │     ├─ sshd          │ │
  │  │ - sway + foot + firefox │                │     ├─ Docker        │ │
  │  │ - external monitor      │                │     ├─ sesh + nvim   │ │
@@ -88,7 +88,7 @@ much cleaner than that:
 8. **Install Tailscale** as the final LXC step:
    `./podroid/03-install-tailscale.sh`. `tailscale up` drops the
    current SSH/lxc-attach session, so it has to be last. Reconnect
-   afterwards via `ssh <user>@pixel-dev` (MagicDNS).
+   afterwards via `ssh <user>@pubuntu` (MagicDNS).
 
 9. **GUI side** on the Stock Terminal:
    `./stock-terminal/install-gui.sh` (sway + foot + firefox), then
@@ -103,9 +103,9 @@ much cleaner than that:
 | CPU virtualization | both VMs on AVF (pKVM) | near-native speed; software emulation (QEMU TCG) is 10–100× slower |
 | GPU | Stock Terminal only | Podroid (user-space app) can't reach `/dev/mali`; Stock Terminal is a privileged system component that can |
 | LXC priv level | **privileged** | Single-user personal box. Saves fighting fuse-overlayfs (Docker) and TUN-passthrough (Tailscale). Container escape lands on Alpine host — itself sandboxed by AVF — so the blast radius is bounded |
-| Network | Tailscale **inside the LXC** | One hop, MagicDNS, works on/off Wi-Fi. Laptop reaches `ssh <user>@pixel-dev` directly |
+| Network | Tailscale **inside the LXC** | One hop, MagicDNS, works on/off Wi-Fi. Laptop reaches `ssh <user>@pubuntu` directly |
 | WM | sway (in Stock Terminal) | Native Wayland; Stock Terminal's display is Wayland-backed by Zink → smoothest path. Avoids any X11/SSH-forwarding fragility |
-| Persistence | bind-mount `/mnt/shared/projects/` into LXC | Survives Podroid app wipes; `tar` backups of `/var/lib/lxc/dev/` land on the same shared dir |
+| Persistence | bind-mount `/mnt/shared/projects/` into LXC | Survives Podroid app wipes; `tar` backups of `/var/lib/lxc/pubuntu/` land on the same shared dir |
 
 ## Useful pointers
 

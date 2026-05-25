@@ -7,7 +7,7 @@
 # is queued behind the disconnect.
 #
 # After the SSH drop, reconnect via Tailscale MagicDNS:
-#   ssh $USER@<TS_HOSTNAME>   (default: pixel-dev)
+#   ssh $USER@<TS_HOSTNAME>   (default: pubuntu)
 #
 # Prereq: privileged LXC with /dev/net/tun bind-mounted in (see
 # 01-create-lxc.sh) — without these, tailscaled fails to bring up
@@ -18,12 +18,12 @@
 # the node isn't already logged in.
 #
 # Env overrides:
-#   TS_HOSTNAME   default: pixel-dev  (advertised name on tailnet)
+#   TS_HOSTNAME   default: pubuntu  (advertised name on tailnet)
 #   TS_AUTHKEY    optional pre-generated auth key (non-interactive 'up')
 
 set -euo pipefail
 
-TS_HOSTNAME="${TS_HOSTNAME:-pixel-dev}"
+TS_HOSTNAME="${TS_HOSTNAME:-pubuntu}"
 
 log()  { printf '\033[1;34m[install-tailscale]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
