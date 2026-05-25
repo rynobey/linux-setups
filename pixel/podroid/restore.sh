@@ -2,10 +2,10 @@
 # Restore a 'pubuntu' LXC snapshot produced by backup.sh.
 #
 # Runs ON THE ALPINE HOST inside Podroid, NOT inside the LXC. Reads
-# backups from /mnt/shared/podroid-backups/ (Android's
-# /sdcard/Download/Podroid/podroid-backups/) — meaning a fresh
-# Podroid install with no LXC at all can still restore from here as
-# long as a previous backup was made before the Podroid uninstall.
+# backups from /var/lib/podroid-backups/ (a regular dir on Alpine's
+# persistent disk). To restore from a backup that's not currently on
+# Alpine — e.g. one you pulled to your laptop earlier — use
+# sync-backups.sh --push to copy it onto Alpine first.
 #
 # Encrypted backups (.tar.gz.age) prompt for the passphrase the
 # backup was written with. Plain .tar.gz backups need no passphrase.
@@ -24,14 +24,17 @@
 #
 # Env overrides:
 #   LXC_NAME       default: pubuntu
-#   SHARED_HOST    default: /mnt/shared
-#   BACKUP_DIR     default: ${SHARED_HOST}/podroid-backups
+#   BACKUP_DIR     default: /var/lib/podroid-backups
 
 set -euo pipefail
 
 LXC_NAME="${LXC_NAME:-pubuntu}"
-SHARED_HOST="${SHARED_HOST:-/mnt/shared}"
-BACKUP_DIR="${BACKUP_DIR:-${SHARED_HOST}/podroid-backups}"
+# Reads backups from a regular dir on Alpine's persistent disk. See
+# backup.sh for the full rationale. To restore an older backup that's
+# only on your laptop (after running sync-backups.sh --pull), use
+# sync-backups.sh --push to copy it back to BACKUP_DIR first, then
+# run this script.
+BACKUP_DIR="${BACKUP_DIR:-/var/lib/podroid-backups}"
 
 log()  { printf '\033[1;34m[restore]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }

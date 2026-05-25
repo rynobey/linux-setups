@@ -2,9 +2,10 @@
 # Restore a Stock Terminal VM snapshot produced by backup.sh.
 #
 # Runs INSIDE the Stock Terminal Debian VM. Reads backups from
-# /mnt/shared/terminal-backups/ (which maps to /sdcard/.../Terminal/
-# terminal-backups/ on Android — so backups taken before a Stock Terminal
-# data wipe / reset are still accessible from a freshly-created VM).
+# /var/lib/stock-terminal-backups/ (regular dir on the VM's persistent
+# disk). To restore from a backup that's only on your laptop (after
+# running sync-backups.sh --pull), use sync-backups.sh --push to copy
+# it back to BACKUP_DIR first, then run this script.
 #
 # Restore flow:
 #   1. Pick a backup (interactive picker, --latest, or path arg)
@@ -25,13 +26,11 @@
 #   ./restore.sh --skip-packages       # untar only; don't replay apt list
 #
 # Env overrides:
-#   SHARED_HOST     default: /mnt/shared
-#   BACKUP_DIR      default: ${SHARED_HOST}/terminal-backups
+#   BACKUP_DIR      default: /var/lib/stock-terminal-backups
 
 set -euo pipefail
 
-SHARED_HOST="${SHARED_HOST:-/mnt/shared}"
-BACKUP_DIR="${BACKUP_DIR:-${SHARED_HOST}/terminal-backups}"
+BACKUP_DIR="${BACKUP_DIR:-/var/lib/stock-terminal-backups}"
 
 log()  { printf '\033[1;34m[restore]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }

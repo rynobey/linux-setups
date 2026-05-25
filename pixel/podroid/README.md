@@ -22,17 +22,83 @@ The Stock Terminal side handles GUI / GPU stuff — see
 
 ## Step 1 — Podroid app, one-time
 
-1. Install Podroid from its
-   [GitHub releases](https://github.com/ExTV/Podroid) (sideload the APK).
-2. Open the app. Pick **Settings → Advanced → Backend → AVF (KVM)** so
-   it uses your Pixel's hardware virtualization. If prompted, grant
-   the `pm grant` ADB command shown in-app.
-3. Allocate RAM: 8 GB is a reasonable default on a 12 GB Pixel 10 —
-   leaves headroom for Android, browser, etc.
-4. Confirm persistence: settings should map a shared Android dir
-   (typically `/sdcard/Download/Podroid/`) into the Alpine VM at
-   `/mnt/shared/`. Files written there survive app wipes.
-5. Open Podroid's terminal — you'll land at the Alpine host shell.
+1. Install Podroid:
+   - **Stock build**: from [GitHub releases](https://github.com/ExTV/Podroid)
+     (sideload the APK). Installs as `com.excp.podroid`.
+   - **Custom build with 6/8 GB RAM tiers**: from the
+     [rynobey/Podroid fork's GH Actions](https://github.com/rynobey/Podroid/actions)
+     — download the `app-debug-*` artifact, unzip, `adb install -r app-debug.apk`.
+     Installs as `com.excp.podroid.debug` *alongside* the stock one (different
+     package, two icons in the launcher).
+
+2. **Grant AVF permissions via ADB.** Required — without these, Podroid
+   silently falls back to QEMU/TCG software emulation (10–100× slower).
+   They're `signature|preinstalled|development` perms that the in-app UI
+   can't grant on its own:
+
+   For the stock build:
+   ```sh
+   adb shell pm grant com.excp.podroid android.permission.MANAGE_VIRTUAL_MACHINE
+   adb shell pm grant com.excp.podroid android.permission.USE_CUSTOM_VIRTUAL_MACHINE
+   ```
+
+   For the custom debug build (replace package with the `.debug` variant):
+   ```sh
+   adb shell pm grant com.excp.podroid.debug android.permission.MANAGE_VIRTUAL_MACHINE
+   adb shell pm grant com.excp.podroid.debug android.permission.USE_CUSTOM_VIRTUAL_MACHINE
+   ```
+
+   These **persist across reboots and in-place updates** but are **lost on
+   uninstall** — re-run them after any reinstall. If you don't have a
+   laptop nearby, [Shizuku](https://shizuku.rikka.app/)'s `rish` shell
+   accepts the same `pm grant ...` commands.
+
+3. **Suppress Android's Phantom Process Killer.** Not strictly required for
+   AVF, but Android will kill Podroid's QEMU child processes under load
+   without this. Apply once:
+   ```sh
+   adb shell device_config set_sync_disabled_for_tests persistent
+   adb shell device_config put activity_manager max_phantom_processes 2147483647
+   adb shell settings put global settings_enable_monitor_phantom_procs false
+   ```
+   The `set_sync_disabled_for_tests persistent` line is crucial — without
+   it, Google's Phenotype service re-syncs the original phantom-killer
+   settings from the server within hours, and you start losing the VM
+   again with no obvious cause.
+
+4. Open the app. Pick **Settings → Advanced → Backend → AVF (KVM)** so
+   it uses the Pixel's hardware virtualization layer. If AVF doesn't
+   show in the picker, re-check step 2 (perms not granted or wrong
+   package).
+
+5. Allocate RAM: 8 GB is a reasonable default on a 12 GB Pixel 10 (leaves
+   headroom for Android + foreground app). The 6 / 8 GB tiers are only
+   present on the custom debug build; stock caps at 4 GB.
+
+6. Settings → **Storage access** → ON. This bind-mounts a shared Android
+   dir (typically `/sdcard/Download/Podroid/`) into the Alpine VM at
+   `/mnt/shared/`. Files written there survive app wipes — backups,
+   recovery tarballs, project source you can't afford to lose.
+
+7. Open Podroid's terminal — you'll land at the Alpine host shell.
+
+### Verifying AVF is actually in use
+
+After starting the VM:
+
+```sh
+adb shell pm list features | grep virtualization_framework        # feature present?
+adb shell getprop ro.boot.hypervisor.vm.supported                 # pKVM exposed?
+adb shell pm dump com.excp.podroid.debug | grep -A2 'granted=true' | grep -E 'VIRTUAL|MANAGE'
+```
+
+All three should be non-empty. Per the Podroid `docs/guide/backends.html`:
+when backend is set to Auto, Podroid checks (1) the
+`virtualization_framework` feature is present, (2) `MANAGE_VIRTUAL_MACHINE`
+is granted, (3) `USE_CUSTOM_VIRTUAL_MACHINE` is granted, (4) the device
+advertises non-protected VM support. All four must pass or it falls back
+to TCG silently. The explicit AVF (KVM) backend toggle is your safety
+net to avoid the fallback.
 
 ## Step 2 — Create the LXC
 
@@ -186,11 +252,37 @@ To stop the auto-start: edit `/var/lib/lxc/pubuntu/config` and remove
 
 ## Backup / restore
 
-Both scripts run on the **Alpine host** (inside Podroid's terminal), not
-inside the LXC. Backups land under `/mnt/shared/podroid-backups/`,
-which Podroid maps to `/sdcard/Download/Podroid/podroid-backups/` on
-Android — outside the app sandbox, so they survive a Podroid app data
-wipe or full uninstall (and a re-install of your patched APK, etc).
+`backup.sh` and `restore.sh` run on the **Alpine host** inside Podroid's
+terminal (not inside the LXC). Backups land at
+`/var/lib/podroid-backups/` — a regular directory on Alpine's
+persistent disk.
+
+> **⚠ Backups are NOT durable on their own.** That directory lives
+> inside Podroid's app sandbox on Android. It survives Alpine reboots,
+> Podroid restarts, VM rebuilds — but **not** a Podroid app-data wipe
+> or app uninstall. For real durability, pull the backups onto your
+> laptop with [`sync-backups.sh`](sync-backups.sh) on a schedule. See
+> the *Durable storage via sync-backups.sh* section below.
+>
+> Earlier versions of these scripts targeted `/mnt/downloads/` on
+> the assumption that AVF's SharedPath feature would expose Android's
+> `/sdcard/Download/` inside the VM. On current Pixel 10 / Android 16
+> firmware the AVF service silently drops external-storage SharedPaths
+> for non-system apps, so the VM never actually sees `/sdcard/`. The
+> design has been simplified: backups go to a known Alpine path,
+> durability is the user's laptop pulling them out via scp.
+>
+> **Migration if you have backups from older script versions:** they
+> were likely written to `/mnt/shared/podroid-backups/` (the LXC bind-mount
+> source). Move them to the new location:
+>
+> ```sh
+> # In the Alpine host terminal:
+> if [ -d /mnt/shared/podroid-backups ]; then
+>     sudo mkdir -p /var/lib/podroid-backups
+>     sudo mv /mnt/shared/podroid-backups/* /var/lib/podroid-backups/
+> fi
+> ```
 
 ### Making backups
 
@@ -298,35 +390,100 @@ LXC (sshd host keys, host apk packages, etc.) — but our setup doesn't
 put anything important there. Re-running `01-create-lxc.sh` on the
 host before the restore gives you a clean Alpine baseline.
 
+### Durable storage via sync-backups.sh
+
+Run [`sync-backups.sh`](sync-backups.sh) **on your laptop** (not on
+Alpine) to copy backups out of Podroid onto your laptop's filesystem.
+This is the actual durability layer — the only thing that survives
+a Podroid uninstall or full Android factory reset.
+
+```sh
+# Default — pull all backups from Alpine to ~/podroid-backups/ on the laptop:
+./pixel/podroid/sync-backups.sh
+
+# List what's on Alpine without downloading:
+./pixel/podroid/sync-backups.sh --list-remote
+
+# Push backups back from your laptop to Alpine (for restore):
+./pixel/podroid/sync-backups.sh --push --local ~/podroid-backups
+
+# Use ADB-forwarded port instead of Tailscale:
+adb forward tcp:9922 tcp:9922
+./pixel/podroid/sync-backups.sh --host localhost
+
+# After pulling, also delete the remote copy (free space on Alpine):
+./pixel/podroid/sync-backups.sh --delete-after
+```
+
+Defaults:
+
+- Target: `root@pubuntu` (Tailscale-resolved) on port 9922 (Podroid's
+  Alpine sshd forward). Override with `--host`, `--port`, `--user` or
+  the corresponding `DEV_HOST` / `DEV_PORT` / `DEV_USER` env vars.
+- Remote dir: `/var/lib/podroid-backups/` on Alpine. Override with
+  `--remote` or `REMOTE_DIR`.
+- Local dir: `~/podroid-backups/`. Override with `--local` or
+  `LOCAL_DIR`.
+
+The script auto-detects whether Alpine has `openssh-sftp-server`
+installed; if not, it falls back to `scp -O` (legacy protocol),
+which works against Alpine's default openssh package. Install
+`openssh-sftp-server` on Alpine for a cleaner experience:
+
+```sh
+ssh root@pubuntu -p 9922 'apk add openssh-sftp-server'
+```
+
+Recommended workflow:
+
+- After every meaningful `backup.sh`, run `sync-backups.sh` once on
+  your laptop. Two-step but reliable.
+- Or stick it in your laptop's crontab to run every few hours.
+
 ## Persistence model
 
 ```
-Android storage (survives anything)
-    /sdcard/Download/Podroid/                       (Podroid's shared dir)
-        ├─ podroid-backups/
-        │   ├─ pubuntu-2026-05-25-1530.tar.gz.age   (encrypted snapshots)
-        │   └─ pubuntu-2026-05-26-0945.tar.gz.age
-        └─ (your project code if you put it here)
-            ▲
-            │ Podroid maps this in as
-            ▼
-Alpine host VM
-    /mnt/shared/
-        ├─ podroid-backups/                          (what backup.sh writes to)
+Laptop (truly durable)
+    ~/podroid-backups/
+        ├─ pubuntu-2026-05-25-1530.tar.gz.age       (encrypted snapshots)
+        └─ pubuntu-2026-05-26-0945.tar.gz.age
+        ▲
+        │ pulled via sync-backups.sh (scp -O over Tailscale
+        │ or ADB-forwarded port 9922 → Podroid → Alpine sshd)
+        │
+Alpine host VM (lives inside Podroid app sandbox)
+    /var/lib/podroid-backups/                        (what backup.sh writes to)
+        ├─ pubuntu-2026-05-25-1530.tar.gz.age
         └─ ...
+    /mnt/downloads/                                  (AVF virtio-9p share from
+                                                      /sdcard/Download/ on Android —
+                                                      ⚠ silently dropped on current
+                                                      Pixel 10 / Android 16 firmware)
         ▲
         │ 01-create-lxc.sh bind-mounts as
         ▼
 Ubuntu LXC
-    /mnt/shared/                                     (whatever's here, persistent)
-    /  (everything else is in the LXC rootfs — wiped if Podroid is wiped,
-       unless a backup.sh snapshot exists in /mnt/shared/podroid-backups/)
+    /mnt/shared/                                     (alias for /mnt/downloads on Alpine)
+    /                                                (everything else is in the LXC rootfs;
+                                                      backup.sh tars it)
 ```
 
-Keep project source code under `/mnt/shared/` (symlink `~/projects`
-there if you want) for redundancy — it survives even without a
-backup. Run `backup.sh` before risky changes to the LXC itself
-(big apt upgrades, restructuring users, etc.), or on a schedule.
+Survival matrix:
+
+| Event | LXC rootfs | Alpine /var/lib/podroid-backups | Laptop ~/podroid-backups |
+|---|---|---|---|
+| LXC destroyed + recreated | ❌ lost (without backup) | ✅ kept | ✅ kept |
+| Alpine VM rebooted | ✅ kept | ✅ kept | ✅ kept |
+| Podroid app restarted | ✅ kept | ✅ kept | ✅ kept |
+| Podroid app-data cleared | ❌ wiped | ❌ wiped | ✅ kept |
+| Podroid uninstalled | ❌ wiped | ❌ wiped | ✅ kept |
+| Android factory reset | ❌ wiped | ❌ wiped | ✅ kept |
+| Laptop disk fails | ❌ wiped | (irrelevant) | ❌ wiped |
+
+So: take backups frequently on Alpine, sync them out to your laptop
+on a meaningful cadence (after each backup, daily, whatever fits),
+and keep your laptop backed up too. The Pixel-side `/var/lib/podroid-backups`
+is a transit zone, not durable storage.
 
 ## Troubleshooting
 

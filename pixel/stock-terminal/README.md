@@ -128,7 +128,24 @@ The Stock Terminal VM disk image lives in app-private storage
 (`/data/user/0/com.android.virtualization.terminal/files/`), unreachable
 without root. So unlike `pixel/podroid/backup.sh` (which tars the whole
 LXC rootfs from outside), the Stock Terminal scripts run **inside the
-VM itself** and tar **selected paths** to the shared mount.
+VM itself** and tar **selected paths** to a known directory on the
+VM's persistent disk. Durability is then handled by pulling those
+tarballs out via ssh+scp — `sync-backups.sh` does this from any
+external host.
+
+> **⚠ Backups inside the VM are not durable on their own.**
+> `/var/lib/stock-terminal-backups/` survives Stock Terminal VM
+> reboots, but lives inside the app sandbox — wiped if the Stock
+> Terminal app is uninstalled or its data is cleared. The actual
+> durability layer is `sync-backups.sh` pulling them onto your
+> laptop / iPad / Termux session / wherever.
+>
+> Earlier versions of these scripts wrote to `/mnt/shared/` on the
+> assumption that AVF's SharedPath into `/sdcard/` would expose
+> backups to Android directly. On current Pixel 10 / Android 16
+> firmware that SharedPath is silently dropped for non-system
+> contexts, so the design was simplified: write locally, ship out
+> via scp.
 
 ### What's preserved
 
@@ -151,9 +168,15 @@ default is `$HOME /root /etc/sway /etc/foot /etc/cloud /usr/local/bin`.
 ./pixel/stock-terminal/backup.sh --list         # show existing
 ```
 
-Backups land in `/mnt/shared/terminal-backups/` as
-`terminal-<timestamp>.tar.gz.age`. The `age` package is installed
-on demand. Multiple snapshots accumulate; prune manually.
+Backups land at `/var/lib/stock-terminal-backups/` as
+`stock-terminal-<timestamp>.tar.gz.age`. The `age` package is
+installed on demand. Multiple snapshots accumulate; prune manually.
+
+The **`stock-terminal-`** filename prefix is deliberate: if you
+collect backups from this VM and from Podroid LXCs onto the same
+laptop, the prefixes (`stock-terminal-*` vs `pubuntu-*`) keep them
+visually distinct and let `sync-backups.sh --push` filter for
+the right kind.
 
 ### Restore
 
@@ -177,17 +200,77 @@ those paths stay.
 
 Encrypted backups re-prompt for the passphrase used at backup time.
 
-### What survives a Stock Terminal data wipe / phone reset
+### Durable storage via sync-backups.sh (any external host)
 
-The backup dir is under `/sdcard/Download/.../Terminal/` (visible to
-Android's Files app), which sits outside the app sandbox. So:
+`sync-backups.sh` runs **anywhere ssh+scp is available** — laptop,
+Termux on the Pixel itself, iPad with a-Shell, another phone, a
+NAS, your friend's machine. It's pure ssh + scp with no
+platform-specific dependencies.
 
-- Backups survive: Stock Terminal "Clear data", Terminal app
-  uninstall, GH Actions-installed APK swaps
-- Backups don't survive: full Android factory reset (wipes `/sdcard/`),
-  manual deletion via the Files app, phone replacement
-- For paranoia, periodically `adb pull /sdcard/Download/.../Terminal/terminal-backups/`
-  to your laptop
+Prereqs (one-time):
+
+1. `sudo apt install -y openssh-server` inside the Stock Terminal VM
+   so it has sshd listening.
+2. Reachability — either install Tailscale inside the VM (`curl -fsSL
+   https://tailscale.com/install.sh | sh && sudo tailscale up
+   --hostname=stock-terminal`), or set up port-forwarding from
+   Android, or be on the same LAN with a known IP.
+
+Then:
+
+```sh
+# Default — pull all backups from the Stock Terminal VM to ~/stock-terminal-backups/:
+./pixel/stock-terminal/sync-backups.sh
+
+# List what's on the VM without downloading:
+./pixel/stock-terminal/sync-backups.sh --list-remote
+
+# Push backups back to the VM (for restore):
+./pixel/stock-terminal/sync-backups.sh --push --local ~/stock-terminal-backups
+
+# Different host (Tailscale IP, custom port):
+./pixel/stock-terminal/sync-backups.sh --host 100.83.12.4
+./pixel/stock-terminal/sync-backups.sh --host phone.local --port 2222
+
+# After pulling, free space on the VM:
+./pixel/stock-terminal/sync-backups.sh --delete-after
+```
+
+Defaults: `droid@stock-terminal` on port 22, remote
+`/var/lib/stock-terminal-backups`, local `~/stock-terminal-backups`.
+Override via flags or `DEV_HOST` / `DEV_PORT` / `DEV_USER` /
+`REMOTE_DIR` / `LOCAL_DIR` env vars.
+
+### Running from Termux on the Pixel itself
+
+A nice property of the pure-ssh design: when no laptop is handy,
+you can pull backups *to the Pixel's own storage* (outside the Stock
+Terminal app sandbox) right from the phone:
+
+```sh
+# in Termux on the Pixel:
+pkg install openssh
+git clone https://github.com/rynobey/linux-setups.git
+cd linux-setups
+LOCAL_DIR=~/storage/downloads/stock-terminal-backups \
+    ./pixel/stock-terminal/sync-backups.sh --host stock-terminal
+```
+
+Termux's `~/storage/downloads/` maps to Android's `/sdcard/Download/`,
+which is public Android storage — survives Stock Terminal app
+uninstall. From there you can pull to a laptop later via `adb pull`,
+upload to a cloud service, whatever.
+
+### Survival matrix
+
+| Event | VM rootfs | VM /var/lib/stock-terminal-backups | Laptop ~/stock-terminal-backups |
+|---|---|---|---|
+| VM rebooted | ✅ kept | ✅ kept | ✅ kept |
+| Stock Terminal app restarted | ✅ kept | ✅ kept | ✅ kept |
+| Stock Terminal "Clear data" | ❌ wiped | ❌ wiped | ✅ kept |
+| Stock Terminal uninstalled | ❌ wiped | ❌ wiped | ✅ kept |
+| Android factory reset | ❌ wiped | ❌ wiped | ✅ kept |
+| Laptop disk fails | ❌ wiped | (irrelevant) | ❌ wiped |
 
 ## Why not run sway *inside* the LXC and forward to here?
 

@@ -20,10 +20,11 @@
 #   ✘ the rest of the rootfs (system tweaks outside the named paths,
 #     /var data, anything you forgot to add to BACKUP_PATHS)
 #
-# Backups land under /mnt/shared/terminal-backups/, which maps to
-# /sdcard/Download/.../Terminal/terminal-backups/ on Android — outside
-# the app sandbox, so they survive a Stock Terminal data wipe or
-# Android factory reset.
+# Backups land under BACKUP_DIR (default /var/lib/terminal-backups/),
+# a regular directory on the Stock Terminal Debian's persistent disk.
+# Survives VM reboots and Stock Terminal app restarts but NOT a Stock
+# Terminal data wipe or app uninstall. For real durability, pull the
+# backups out to your laptop / iPad / Termux via sync-backups.sh.
 #
 # Usage:
 #   ./backup.sh                  # encrypted snapshot (default)
@@ -33,17 +34,24 @@
 # Env overrides:
 #   BACKUP_PATHS    space-separated list of paths to tar
 #                   default: "$HOME /root /etc/sway /etc/foot /etc/cloud /usr/local/bin"
-#   SHARED_HOST     default: /mnt/shared
-#   BACKUP_DIR      default: ${SHARED_HOST}/terminal-backups
-#   BACKUP_PREFIX   default: terminal
+#   BACKUP_DIR      default: /var/lib/stock-terminal-backups
+#   BACKUP_PREFIX   default: stock-terminal
 
 set -euo pipefail
 
 DEFAULT_PATHS="$HOME /root /etc/sway /etc/foot /etc/cloud /usr/local/bin"
 BACKUP_PATHS="${BACKUP_PATHS:-$DEFAULT_PATHS}"
-SHARED_HOST="${SHARED_HOST:-/mnt/shared}"
-BACKUP_DIR="${BACKUP_DIR:-${SHARED_HOST}/terminal-backups}"
-BACKUP_PREFIX="${BACKUP_PREFIX:-terminal}"
+# Backups land in a regular dir on the Stock Terminal Debian's
+# persistent disk. We do NOT write to /mnt/shared (the AVF SharedPath
+# from Android) because that share is silently dropped on the current
+# Pixel 10 / Android 16 firmware. To get backups OFF the VM onto
+# durable storage, run sync-backups.sh from any host with ssh+scp
+# (laptop, Termux, iPad). See README.
+BACKUP_DIR="${BACKUP_DIR:-/var/lib/stock-terminal-backups}"
+# Prefix tagged with origin so files from different VMs landing in the
+# same dir on a laptop don't collide (Podroid backups carry the LXC
+# name e.g. `pubuntu-...`; Stock Terminal backups are `stock-terminal-...`).
+BACKUP_PREFIX="${BACKUP_PREFIX:-stock-terminal}"
 
 log()  { printf '\033[1;34m[backup]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
@@ -121,11 +129,6 @@ fi
 
 # ---- backup mode -----------------------------------------------------------
 warn_not_in_tmux
-
-if [ ! -d "$SHARED_HOST" ]; then
-    err "shared dir $SHARED_HOST missing — is the Stock Terminal's storage-access feature enabled?"
-    exit 1
-fi
 
 [ "$ENCRYPT" -eq 1 ] && ensure_age
 sudo mkdir -p "$BACKUP_DIR"

@@ -17,7 +17,9 @@
 #   LXC_DIST      default: ubuntu
 #   LXC_RELEASE   default: noble
 #   LXC_ARCH      default: arm64
-#   SHARED_HOST   default: /mnt/shared    (path on Alpine host to bind-mount)
+#   SHARED_HOST   default: /mnt/downloads (Alpine path that's the AVF
+#                                          virtio-9p share from /sdcard/Download/
+#                                          — Android-backed, survives Podroid wipe)
 #   SHARED_GUEST  default: mnt/shared     (path inside LXC; relative for lxc.mount.entry)
 #
 # Idempotent: skips create/config/start if the container already exists.
@@ -28,7 +30,7 @@ LXC_NAME="${LXC_NAME:-pubuntu}"
 LXC_DIST="${LXC_DIST:-ubuntu}"
 LXC_RELEASE="${LXC_RELEASE:-noble}"
 LXC_ARCH="${LXC_ARCH:-arm64}"
-SHARED_HOST="${SHARED_HOST:-/mnt/shared}"
+SHARED_HOST="${SHARED_HOST:-/mnt/downloads}"
 SHARED_GUEST="${SHARED_GUEST:-mnt/shared}"
 
 log()  { printf '\033[1;34m[01-create-lxc]\033[0m %s\n' "$*"; }
@@ -71,8 +73,22 @@ sudo lxc-create -t download -n "$LXC_NAME" -- \
 config="/var/lib/lxc/${LXC_NAME}/config"
 log "patching $config for Docker + Tailscale (privileged)"
 
-# Make sure the shared dir exists on the host before binding it in.
-sudo mkdir -p "$SHARED_HOST"
+# Sanity check the shared dir exists on the host. It's normally mounted
+# by /etc/init.d/podroid-bootstrap (the virtio-9p 'downloads' tag from
+# AVF → /sdcard/Download/ on Android). If it's missing, the user
+# probably hasn't enabled Storage access in Podroid or hasn't granted
+# MANAGE_EXTERNAL_STORAGE — warn but don't fail; the LXC can still run,
+# just without persistent /mnt/shared.
+if [ ! -d "$SHARED_HOST" ]; then
+    warn "$SHARED_HOST doesn't exist on this Alpine host."
+    warn "this is normally the AVF virtio-9p share from /sdcard/Download/."
+    warn "to enable it: open Podroid → Settings → Storage access → ON,"
+    warn "and grant MANAGE_EXTERNAL_STORAGE to the Podroid app."
+    warn "without it, files written to /mnt/shared inside the LXC are"
+    warn "ALPINE-INTERNAL and lost on Podroid uninstall/data-wipe."
+    warn "creating $SHARED_HOST as a regular dir for now — backups won't survive."
+    sudo mkdir -p "$SHARED_HOST"
+fi
 
 sudo tee -a "$config" >/dev/null <<EOF
 
@@ -92,10 +108,11 @@ lxc.cgroup.devices.allow = c 10:200 rwm
 lxc.cgroup2.devices.allow = c 10:200 rwm
 lxc.mount.entry = /dev/net dev/net none bind,create=dir 0 0
 
-# Persistence: bind Podroid's shared dir (which itself maps to Android's
-# /sdcard/Download/Podroid/) into the LXC. Project files saved under
-# ${SHARED_HOST}/ on the Alpine host (and equivalently /sdcard/... on
-# Android) survive LXC destruction and Podroid app wipes.
+# Persistence: bind Podroid's Android-backed share (Alpine's
+# ${SHARED_HOST}, which is /sdcard/Download/ on Android via the AVF
+# virtio-9p 'downloads' tag) into the LXC at /mnt/shared. Files saved
+# there land on Android public storage — survive LXC destruction,
+# Podroid app wipes, and even Podroid uninstall.
 lxc.mount.entry = ${SHARED_HOST} ${SHARED_GUEST} none bind,create=dir 0 0
 
 # Make the in-container hostname (what shows up in shell prompts as

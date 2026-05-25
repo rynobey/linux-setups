@@ -3,10 +3,13 @@
 # Android storage. Runs ON THE ALPINE HOST inside Podroid, NOT inside
 # the LXC.
 #
-# Backups land under SHARED_HOST/podroid-backups/ (default /mnt/shared/
-# podroid-backups/), which Podroid maps to /sdcard/Download/Podroid/
-# podroid-backups/ on Android — safely outside the app sandbox, so the
-# backups survive a Podroid app data wipe or full uninstall.
+# Backups land under BACKUP_DIR (default /var/lib/podroid-backups/),
+# a regular directory on Alpine's persistent disk. The disk itself
+# lives inside Podroid's app sandbox, so backups survive Alpine
+# reboots, Podroid restarts, and VM rebuilds — but NOT a Podroid
+# app-data wipe or uninstall. To get backups onto truly durable
+# storage, run sync-backups.sh from your laptop after each backup
+# (or on a schedule) to scp them off Alpine.
 #
 # Filenames carry a timestamp so multiple snapshots accumulate. Use
 # --list to see what you have and restore.sh to roll back to any of
@@ -25,15 +28,19 @@
 #
 # Env overrides:
 #   LXC_NAME       default: pubuntu
-#   SHARED_HOST    default: /mnt/shared
-#   BACKUP_DIR     default: ${SHARED_HOST}/podroid-backups
+#   BACKUP_DIR     default: /var/lib/podroid-backups
 #   BACKUP_PREFIX  default: ${LXC_NAME}
 
 set -euo pipefail
 
 LXC_NAME="${LXC_NAME:-pubuntu}"
-SHARED_HOST="${SHARED_HOST:-/mnt/shared}"
-BACKUP_DIR="${BACKUP_DIR:-${SHARED_HOST}/podroid-backups}"
+# Backups land in a regular dir on Alpine's persistent disk. We do NOT
+# write to /mnt/downloads (the AVF virtio-9p share from Android's
+# /sdcard/Download/) because that share is silently dropped on some
+# Android 16 / Pixel 10 firmware builds — backups would land nowhere.
+# To get backups OFF Alpine onto durable storage, run sync-backups.sh
+# from your laptop (Tailscale or adb-forward + scp). See README.
+BACKUP_DIR="${BACKUP_DIR:-/var/lib/podroid-backups}"
 BACKUP_PREFIX="${BACKUP_PREFIX:-${LXC_NAME}}"
 
 log()  { printf '\033[1;34m[backup]\033[0m %s\n' "$*"; }
@@ -137,10 +144,7 @@ if [ ! -d "/var/lib/lxc/${LXC_NAME}" ]; then
     err "LXC '${LXC_NAME}' not found at /var/lib/lxc/${LXC_NAME}"
     exit 1
 fi
-if [ ! -d "$SHARED_HOST" ]; then
-    err "shared dir $SHARED_HOST missing — is Podroid's persistence mount active?"
-    exit 1
-fi
+# BACKUP_DIR is created on demand below; no sanity-check needed.
 
 [ "$ENCRYPT" -eq 1 ] && ensure_age
 sudo mkdir -p "$BACKUP_DIR"
