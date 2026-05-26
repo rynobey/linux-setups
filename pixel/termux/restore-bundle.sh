@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
-# After `termux-restore`-ing the bundle made by gather-bundle.sh,
-# this script walks you through finishing the recovery: verifies the
-# bundle contents are where they're expected, prints the next-step
-# commands tailored to what's actually present.
+# After restore-all.sh has restored $PREFIX and $HOME on a fresh phone,
+# this script walks you through the app-side recovery: verifies the
+# bundle contents are present, prints the next-step commands for the
+# Podroid / LXC restore (and Stock Terminal if applicable).
 #
-# Doesn't automate the sideload/restore steps themselves on purpose —
+# Doesn't automate the sideload / app-side restore steps on purpose —
 # those touch other apps (Podroid, Stock Terminal) and the right
 # sequence depends on what's still installed vs. what needs sideloading.
 # Walking you through it explicitly is safer than guessing.
 #
-# Run AFTER:
+# Full recovery sequence:
 #   1. Fresh Termux install (sideload from F-Droid)
-#   2. termux-restore /sdcard/Download/termux-recovery-<date>.tar.xz
+#   2. termux-setup-storage   (tap Allow; gives ~/storage/shared)
+#   3. bash ~/storage/shared/Download/restore-all.sh
+#      (this restores $PREFIX via termux-restore + $HOME via age + tar)
+#   4. ~/linux-setups/pixel/termux/restore-bundle.sh   (this script)
 #
-# Then:
-#   ~/linux-setups/pixel/termux/restore-bundle.sh
+# If you run this script and the inventory shows everything missing,
+# you probably haven't done step 3 yet — the empty-inventory branch at
+# the bottom of this script will print the exact extraction commands.
 
 set -euo pipefail
 
@@ -109,11 +113,14 @@ fi
 if [ "$HAVE_PODROID_BACKUP" -eq 1 ]; then
     latest_podroid=$(ls -t "${podroid_backups[@]}" | head -1)
     echo "  # 3. Open the new Podroid, set Backend=AVF, RAM=8GB, start VM, then:"
+    echo "       #    (sync-backups.sh auto-detects Termux → uses localhost:9922,"
+    echo "       #     which reaches Alpine through Podroid's port forward)"
     echo "       LOCAL_DIR=$BUNDLE_BACKUPS \\"
-    echo "         $LSDIR/pixel/podroid/sync-backups.sh --push --host pubuntu --port 9922 --user root"
+    echo "         bash $LSDIR/pixel/podroid/sync-backups.sh --push"
     echo
     echo "  # 4. SSH to Alpine and restore:"
-    echo "       ssh root@pubuntu -p 9922 'cd /root/projects/linux-setups && \\"
+    echo "       #    (localhost:9922 again — 'pubuntu' is the LXC, not Alpine)"
+    echo "       ssh root@localhost -p 9922 'cd /root/projects/linux-setups && \\"
     echo "         ./pixel/podroid/01-create-lxc.sh && \\"
     echo "         ./pixel/podroid/restore.sh --latest'"
     echo
@@ -126,18 +133,60 @@ if [ "$HAVE_TERMINAL_BACKUP" -eq 1 ]; then
     echo "  # 6. SSH into Stock Terminal Debian (after installing openssh-server"
     echo "       and putting it on Tailscale or otherwise reachable), then push + restore:"
     echo "       LOCAL_DIR=$BUNDLE_BACKUPS \\"
-    echo "         $LSDIR/pixel/stock-terminal/sync-backups.sh --push --host stock-terminal --user droid"
+    echo "         bash $LSDIR/pixel/stock-terminal/sync-backups.sh --push --host stock-terminal --user droid"
     echo "       ssh droid@stock-terminal 'cd ~/linux-setups && \\"
     echo "         ./pixel/stock-terminal/install-gui.sh && \\"
     echo "         ./pixel/stock-terminal/restore.sh --latest'"
     echo
 fi
 
-if [ "$HAVE_REPO" -eq 1 ] && [ "$HAVE_APK" -eq 0 ] \
+# ---- if inventory is essentially empty, suggest restore-all.sh -------------
+# This is the "I'm on a fresh phone, where do I start?" case. Look for a
+# restore-all.sh on /sdcard and tell the user to run it.
+if [ "$HAVE_REPO" -eq 0 ] && [ "$HAVE_APK" -eq 0 ] \
    && [ "$HAVE_PODROID_BACKUP" -eq 0 ] && [ "$HAVE_TERMINAL_BACKUP" -eq 0 ]; then
-    warn "bundle looks empty — only the repo survived. Likely you ran"
-    warn "gather-bundle.sh with --skip-sync and --skip-apk, or the syncs"
-    warn "failed. You can still use the repo to bootstrap fresh."
+    echo
+    warn "inventory is empty — looks like the recovery hasn't been done yet."
+    DL="$HOME/storage/shared/Download"
+    DL_FALLBACK="/sdcard/Download"
+    found_dir=""
+    for d in "$DL" "$DL_FALLBACK"; do
+        if [ -f "$d/restore-all.sh" ]; then
+            found_dir="$d"
+            break
+        fi
+    done
+    if [ -n "$found_dir" ]; then
+        log "Found restore-all.sh on /sdcard. Run it:"
+        echo
+        echo "    bash $found_dir/restore-all.sh"
+        echo
+        log "That restores \$PREFIX (Termux packages) then decrypts + extracts"
+        log "\$HOME from the age-encrypted bundle. Then re-run this script."
+    else
+        shopt -s nullglob
+        home_bundles=("$DL"/pixel-home-*.tar.age "$DL_FALLBACK"/pixel-home-*.tar.age)
+        prefix_bundles=("$DL"/termux-prefix-*.tar.xz "$DL_FALLBACK"/termux-prefix-*.tar.xz)
+        shopt -u nullglob
+        if [ "${#home_bundles[@]}" -gt 0 ] && [ "${#prefix_bundles[@]}" -gt 0 ]; then
+            home_b=$(ls -t "${home_bundles[@]}" | head -1)
+            prefix_b=$(ls -t "${prefix_bundles[@]}" | head -1)
+            warn "restore-all.sh missing but the artifacts are here. Manual restore:"
+            echo
+            echo "    termux-restore $prefix_b"
+            echo "    age -d $home_b | tar xf - -C \"\$HOME\" --no-same-owner"
+            echo
+        else
+            warn "no recovery artifacts found in ~/storage/shared/Download/ or /sdcard/Download/."
+            warn "Bootstrap fresh from scratch:"
+            warn "  curl -fsSL https://raw.githubusercontent.com/rynobey/linux-setups/master/pixel/termux/init.sh | bash"
+        fi
+    fi
+elif [ "$HAVE_REPO" -eq 1 ] && [ "$HAVE_APK" -eq 0 ] \
+     && [ "$HAVE_PODROID_BACKUP" -eq 0 ] && [ "$HAVE_TERMINAL_BACKUP" -eq 0 ]; then
+    warn "only the repo survived. Either you ran gather-bundle.sh with"
+    warn "--skip-sync and --skip-apk, or the syncs/APK fetch failed."
+    warn "You can still use the repo to bootstrap fresh."
 fi
 
 log "All steps above are idempotent; re-run safely."

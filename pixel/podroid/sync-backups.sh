@@ -26,7 +26,8 @@
 #   --list-local        just list what's local
 #
 # Env / flags:
-#   --host <name>       SSH target (default: pubuntu via Tailscale)
+#   --host <name>       SSH target (default: 'pixel' off-device, or
+#                       'localhost' when running on Termux on the Pixel itself)
 #                       or set DEV_HOST=...
 #   --port <n>          SSH port (default: 9922 — Podroid's Alpine forward)
 #                       or set DEV_PORT=...
@@ -52,7 +53,23 @@
 
 set -euo pipefail
 
-DEV_HOST="${DEV_HOST:-pubuntu}"
+# Default host depends on where this script is running:
+#   - On Termux on the same Pixel: 'localhost' (Podroid's port forward
+#     binds 0.0.0.0:9922 on Android; localhost reaches it; Tailscale
+#     hairpin routing to one's own node is unreliable so 'pixel' fails)
+#   - On a different machine (laptop, etc.): 'pixel' (the Pixel's
+#     Tailscale name, which routes via the tailnet to Podroid's port
+#     forward)
+# Override via env DEV_HOST or --host flag.
+#
+# IMPORTANT: don't use 'pubuntu' here — that's the LXC's Tailscale name,
+# not Alpine's. The backups live on the Alpine host, NOT inside the LXC.
+if [ -n "${PREFIX:-}" ] && [ -x "${PREFIX}/bin/pkg" ]; then
+    DEV_HOST_DEFAULT="localhost"
+else
+    DEV_HOST_DEFAULT="pixel"
+fi
+DEV_HOST="${DEV_HOST:-$DEV_HOST_DEFAULT}"
 DEV_PORT="${DEV_PORT:-9922}"
 DEV_USER="${DEV_USER:-root}"
 REMOTE_DIR="${REMOTE_DIR:-/var/lib/podroid-backups}"

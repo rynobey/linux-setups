@@ -39,10 +39,15 @@ fi
 #   git              clone/pull linux-setups
 #   openssh          ssh, scp, ssh-keygen, sshd  (sync-backups.sh, bootstrap-git.sh)
 #   android-tools    adb  (adb-setup.sh — pair/connect to the Pixel ADB)
-#   termux-tools     termux-backup / termux-restore / termux-setup-storage
+#   termux-tools     termux-setup-storage (still useful; we no longer rely
+#                    on termux-backup since it only bundles $PREFIX)
 #   termux-api       optional clipboard / notification / share integration
 #   curl, wget       download APKs from GH Actions, fetch bootstrap scripts
-#   tar, xz-utils    backup compression
+#   tar, xz-utils    backup compression (xz still useful for incoming
+#                    third-party archives, even though our bundles are
+#                    plain tar streamed through age)
+#   age              passphrase-encrypt the recovery bundle (gather-bundle.sh
+#                    + the LXC backup scripts)
 #   nano             on-device editor for quick config tweaks
 #   coreutils        sha256sum, mktemp, etc. (usually present, ensure it)
 #
@@ -50,7 +55,7 @@ log "[1/6] updating package index + installing core tools"
 pkg update -y
 pkg install -y \
     git openssh android-tools termux-tools termux-api \
-    curl wget tar xz-utils nano coreutils
+    curl wget tar xz-utils age nano coreutils
 
 # ---- 2. shared-storage access ----------------------------------------------
 # Creates ~/storage/ with symlinks to /sdcard/Download, /sdcard/Pictures,
