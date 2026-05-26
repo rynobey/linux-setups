@@ -1,5 +1,5 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# Run any local script INSIDE the pubuntu LXC (which lives inside Alpine
+# Run a local script INSIDE the pubuntu LXC (which lives inside Alpine
 # which lives inside Podroid), without requiring linux-setups to be
 # cloned in either Alpine or the LXC.
 #
@@ -11,40 +11,43 @@
 #   bash lxc-run.sh ../podroid/02-bootstrap-lxc.sh
 #   LXC_NAME=foo bash lxc-run.sh ../podroid/install-docker.sh
 #
-# How it works (different from alpine-run.sh because of the extra
-# namespace hop):
-#   1. SSH preflight to Alpine (same as alpine-run.sh)
-#   2. mktemp inside the LXC's rootfs on Alpine — path looks like
-#      /var/lib/lxc/$LXC_NAME/rootfs/tmp/lxc-run.XXXXXX from Alpine's
-#      view, but the same file appears as /tmp/lxc-run.XXXXXX from
-#      inside the LXC. Privileged LXC means uid 0 in Alpine == uid 0
-#      in pubuntu, so the file is readable inside.
-#   3. Stream the script body to that file via SSH.
-#   4. ssh -t to Alpine, then `lxc-attach -n $LXC_NAME -- bash /tmp/...`.
+# How it works:
+#   1. SSH preflight + verify the LXC is running.
+#   2. tar up the script's PARENT DIRECTORY locally — so sibling scripts
+#      like authorize-pubkeys.sh / install-docker.sh that 02-bootstrap-lxc.sh
+#      references via $SCRIPT_DIR/foo.sh come along automatically. Without
+#      this, only the entry script would land inside the LXC and any
+#      "$SCRIPT_DIR/sibling.sh" call would fail with "No such file".
+#   3. mktemp a working dir inside the LXC's rootfs on Alpine — path looks
+#      like /var/lib/lxc/$LXC_NAME/rootfs/tmp/lxc-run.XXXXXX from Alpine,
+#      but the same dir appears as /tmp/lxc-run.XXXXXX from inside the
+#      LXC (privileged LXC means uid 0 == uid 0, so the file is readable
+#      inside).
+#   4. Stream the tarball to that dir via SSH, extract.
+#   5. ssh -t to Alpine, then `lxc-attach -n $LXC_NAME -- bash <script>`.
 #      The `ssh -t` PTY is propagated through lxc-attach to the
-#      in-container bash, so create-user.sh's `read` and passwd's
-#      noecho prompt all work interactively.
-#   5. Trap-clean the temp file even if interrupted.
+#      in-container bash, so interactive `read` and noecho passwd prompts
+#      all work.
+#   6. Trap-clean the temp dir even if interrupted.
 #
-# Why not pipe the script via stdin to `lxc-attach -- bash -s` ?
-#   Because that hijacks stdin with the script content, and any
-#   interactive `read` inside the script then reads from the same
-#   pipe instead of the user's terminal. Writing to a file in the
-#   LXC's rootfs lets bash exec the FILE while stdin stays the PTY.
+# Why not pipe the script via stdin to `lxc-attach -- bash -s`?
+#   Stdin would carry the script body, leaving any interactive `read`
+#   inside the script reading from the EOF'd pipe instead of the user's
+#   terminal. Writing the file in the LXC's rootfs keeps stdin = PTY.
 #
-# Env / SSH connection (same defaults as alpine-run.sh):
+# Env / SSH connection:
 #   ALPINE_HOST (default: localhost)
 #   ALPINE_PORT (default: 9922)
 #   ALPINE_USER (default: root)
+#   LXC_NAME    (default: pubuntu)
 #
 # Env passthrough to the in-LXC script (extend the allowlist if needed):
-#   LXC_NAME (which LXC to attach into, default: pubuntu)
 #   SKIP_PUBKEYS, SKIP_DOCKER, SKIP_TOOLCHAINS, SKIP_SESH, SKIP_NODE
 
 set -euo pipefail
 
 if [ "$#" -lt 1 ]; then
-    sed -n '2,45p' "$0" >&2
+    sed -n '2,50p' "$0" >&2
     exit 2
 fi
 
@@ -69,6 +72,10 @@ if [ ! -f "$LOCAL_SCRIPT" ]; then
     exit 1
 fi
 
+LOCAL_SCRIPT_ABS=$(cd "$(dirname "$LOCAL_SCRIPT")" && pwd)/$(basename "$LOCAL_SCRIPT")
+SCRIPT_DIR=$(dirname "$LOCAL_SCRIPT_ABS")
+SCRIPT_NAME=$(basename "$LOCAL_SCRIPT_ABS")
+
 # ---- 2. SSH preflight + verify the LXC is running -------------------------
 if ! ssh -p "$ALPINE_PORT" -o ConnectTimeout=5 -o BatchMode=yes \
         "${ALPINE_USER}@${ALPINE_HOST}" 'true' 2>/dev/null; then
@@ -86,18 +93,23 @@ if [ "$STATE" != "RUNNING" ]; then
     exit 1
 fi
 
-# ---- 3. copy script to a file inside the LXC's rootfs ---------------------
+# ---- 3. mktemp working dir inside the LXC's rootfs ------------------------
 LXC_ROOTFS="/var/lib/lxc/$LXC_NAME/rootfs"
-REMOTE_FILE=$(ssh -p "$ALPINE_PORT" "${ALPINE_USER}@${ALPINE_HOST}" \
-    "mktemp $LXC_ROOTFS/tmp/lxc-run.XXXXXX")
+REMOTE_DIR=$(ssh -p "$ALPINE_PORT" "${ALPINE_USER}@${ALPINE_HOST}" \
+    "mktemp -d $LXC_ROOTFS/tmp/lxc-run.XXXXXX")
 
-# What the file path looks like from INSIDE the LXC (just /tmp/lxc-run.XXX)
-LXC_INTERNAL_PATH="${REMOTE_FILE#$LXC_ROOTFS}"
+# Path as seen from INSIDE the LXC (strips the rootfs prefix → /tmp/lxc-run.XXX)
+LXC_INTERNAL_DIR="${REMOTE_DIR#$LXC_ROOTFS}"
 
-cat "$LOCAL_SCRIPT" | ssh -p "$ALPINE_PORT" "${ALPINE_USER}@${ALPINE_HOST}" \
-    "cat > $REMOTE_FILE && chmod +x $REMOTE_FILE"
+# ---- 4. tar the script's parent dir, stream + extract on Alpine -----------
+# All sibling scripts (authorize-pubkeys.sh, install-*.sh, etc.) come along.
+# Cost is negligible — these dirs are <100 KB total.
+log "packaging $(basename "$SCRIPT_DIR")/ → ${LXC_NAME}:${LXC_INTERNAL_DIR}/"
+tar -C "$SCRIPT_DIR" -cf - . \
+    | ssh -p "$ALPINE_PORT" "${ALPINE_USER}@${ALPINE_HOST}" \
+            "tar -xf - -C $REMOTE_DIR && chmod -R +x $REMOTE_DIR"
 
-# ---- 4. build env-var preamble + arg quoting -------------------------------
+# ---- 5. build env-var preamble + arg quoting -------------------------------
 ENV_PREFIX=""
 for var in "${ENV_VARS_PASSTHROUGH[@]}"; do
     if [ -n "${!var:-}" ]; then
@@ -110,12 +122,12 @@ for a in "$@"; do
     QUOTED_ARGS+=" $(printf '%q' "$a")"
 done
 
-log "running $(basename "$LOCAL_SCRIPT")$QUOTED_ARGS inside LXC '$LXC_NAME'"
+log "running $SCRIPT_NAME$QUOTED_ARGS inside LXC '$LXC_NAME'"
 
-# ---- 5. exec with TTY through lxc-attach ----------------------------------
+# ---- 6. exec with TTY through lxc-attach ----------------------------------
 EXIT_CODE=0
 ssh -t -p "$ALPINE_PORT" "${ALPINE_USER}@${ALPINE_HOST}" \
-    "trap 'rm -f $REMOTE_FILE' EXIT; lxc-attach -n $LXC_NAME -- ${ENV_PREFIX}bash $LXC_INTERNAL_PATH$QUOTED_ARGS" \
+    "trap 'rm -rf $REMOTE_DIR' EXIT; lxc-attach -n $LXC_NAME -- ${ENV_PREFIX}bash $LXC_INTERNAL_DIR/$SCRIPT_NAME$QUOTED_ARGS" \
     || EXIT_CODE=$?
 
 exit $EXIT_CODE
