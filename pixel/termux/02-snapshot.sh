@@ -20,20 +20,20 @@
 #                                     backups, APKs, and the linux-setups
 #                                     repo live, hence the encryption.
 #
-#   restore-all.sh                  — Self-contained recovery script (copy
-#                                     of pixel/termux/restore-all.sh from
+#   03-restore-snapshot.sh                  — Self-contained recovery script (copy
+#                                     of pixel/termux/03-restore-snapshot.sh from
 #                                     the repo). Placed on /sdcard so it
 #                                     survives Termux uninstall.
 #
 # Restore on a freshly-wiped phone:
 #   1. Install Termux (sideload from F-Droid)
 #   2. termux-setup-storage                                   (tap Allow)
-#   3. bash ~/storage/shared/Download/restore-all.sh
+#   3. bash ~/storage/shared/Download/03-restore-snapshot.sh
 #
-# restore-all.sh restores $PREFIX first (which brings in age + tar +
+# the snapshot restore script restores $PREFIX first (which brings in age + tar +
 # openssh), then decrypts and extracts $HOME. After that, $HOME contains
-# the linux-setups repo with restore-bundle.sh for the Podroid/LXC
-# app-side restore.
+# the linux-setups repo so you can run pixel/client/04-restore-lxc.sh
+# to push the LXC backup back and restore the VM.
 #
 # Why this is split into THREE files rather than one mega-tarball: the
 # offline-recovery script needs age to decrypt the HOME tar, but age
@@ -128,9 +128,9 @@ fi
 DATE_TAG=$(date +%F)
 PREFIX_DEST="$DEST_DIR/termux-prefix-$DATE_TAG.tar.xz"
 HOME_DEST="$DEST_DIR/pixel-home-$DATE_TAG.tar.age"
-RESTORE_SCRIPT_DEST="$DEST_DIR/restore-all.sh"
+RESTORE_SCRIPT_DEST="$DEST_DIR/03-restore-snapshot.sh"
 
-log()  { printf '\033[1;34m[gather-bundle]\033[0m %s\n' "$*"; }
+log()  { printf '\033[1;34m[snapshot]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; }
 
@@ -221,7 +221,7 @@ if [ "$SKIP_PREFIX" -eq 1 ]; then
     log "[4/6] skipping \$PREFIX backup (--skip-prefix)"
 else
     log "[4/6] writing \$PREFIX backup → $PREFIX_DEST"
-    log "      (this is what restore-all.sh restores first, to bring age + ssh"
+    log "      (this is what the snapshot restore script restores first, to bring age + ssh"
     log "       + other tools into a fresh Termux before \$HOME decryption)"
     termux-backup "$PREFIX_DEST"
     prefix_size=$(du -h "$PREFIX_DEST" | awk '{print $1}')
@@ -257,13 +257,13 @@ else
     log "      \$HOME bundle: $home_size at $HOME_DEST"
 fi
 
-# ---- 6. drop the restore-all.sh script next to the artifacts ---------------
-RESTORE_SCRIPT_SRC="$LSDIR/pixel/termux/restore-all.sh"
+# ---- 6. drop the 03-restore-snapshot.sh script next to the artifacts ---------------
+RESTORE_SCRIPT_SRC="$LSDIR/pixel/termux/03-restore-snapshot.sh"
 if [ -f "$RESTORE_SCRIPT_SRC" ]; then
-    log "[6/6] copying restore-all.sh → $RESTORE_SCRIPT_DEST"
+    log "[6/6] copying 03-restore-snapshot.sh → $RESTORE_SCRIPT_DEST"
     cp "$RESTORE_SCRIPT_SRC" "$RESTORE_SCRIPT_DEST"
 else
-    warn "[6/6] $RESTORE_SCRIPT_SRC not found — restore-all.sh NOT copied."
+    warn "[6/6] $RESTORE_SCRIPT_SRC not found — 03-restore-snapshot.sh NOT copied."
     warn "      on the recovery side you'd need to clone linux-setups first."
 fi
 
@@ -282,4 +282,4 @@ fi
 log "Restore on a freshly-wiped phone:"
 log "  1. Install Termux (sideload from F-Droid)"
 log "  2. termux-setup-storage   (tap Allow on the popup)"
-log "  3. bash ~/storage/shared/Download/restore-all.sh"
+log "  3. bash ~/storage/shared/Download/03-restore-snapshot.sh"

@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# Bootstrap SSH access on this device using public keys from the
-# rynobey/linux-setups public repo.
-#
-# After running this, any machine whose private key matches a pubkey in
-# this repo's pubkeys/*.pub can SSH into this device as $USER.
+# Bootstrap SSH on this device. Three things:
+#   1. Ensure sshd is installed and running (so other machines can SSH in).
+#   2. Generate this device's own ed25519 key if absent (so this device
+#      can SSH out, e.g. to GitHub).
+#   3. Authorize every pubkey from the rynobey/linux-setups repo so all
+#      your other devices listed in pubkeys/ can SSH in.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/rynobey/linux-setups/master/bootstrap-ssh.sh | bash
 #
-# Idempotent: re-running adds any new keys, skips ones already authorized.
+# Idempotent: re-running skips key gen if id_ed25519 exists, skips pubkey
+# entries already in authorized_keys.
 # Doesn't touch sshd_config — distros default to key-friendly. Lock down
 # PasswordAuthentication separately if desired (see pixel/podroid/README.md).
 
@@ -106,6 +108,21 @@ else
     sudo service ssh start 2>/dev/null || sudo service sshd start
 fi
 log "sshd running"
+
+# ---- generate this device's own ed25519 key if absent ---------------------
+# Moved here from bootstrap-git.sh — owning the key gen in the SSH
+# bootstrap step keeps related concerns together. bootstrap-git.sh now
+# just confirms the key exists before guiding the GitHub-paste flow.
+KEY_PATH="$HOME/.ssh/id_ed25519"
+mkdir -p "$HOME/.ssh"
+chmod 700 "$HOME/.ssh"
+if [ ! -f "$KEY_PATH" ]; then
+    host_tag=$(hostname 2>/dev/null || echo "device")
+    log "generating ed25519 key at $KEY_PATH (no passphrase)"
+    ssh-keygen -t ed25519 -N "" -C "${USER}@${host_tag}" -f "$KEY_PATH"
+else
+    log "ssh key already at $KEY_PATH — reusing"
+fi
 
 # ---- fetch pubkeys from the public repo tarball ----------------------------
 log "fetching pubkeys/ from ${REPO_OWNER}/${REPO_NAME}@${REPO_BRANCH}"

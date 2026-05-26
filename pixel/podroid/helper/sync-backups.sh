@@ -75,7 +75,7 @@ DEV_USER="${DEV_USER:-root}"
 REMOTE_DIR="${REMOTE_DIR:-/var/lib/podroid-backups}"
 
 # Local-side directory varies by context:
-#   - On Termux on the Pixel: gather-bundle.sh pulls into ~/recovery-bundle/,
+#   - On Termux on the Pixel: snapshot.sh pulls into ~/recovery-bundle/,
 #     and the recovery flow extracts the bundle into the same path. Default
 #     to that so a stand-alone `sync-backups.sh --push` Just Works without
 #     needing --local.

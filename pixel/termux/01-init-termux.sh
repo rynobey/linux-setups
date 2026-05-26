@@ -3,8 +3,8 @@
 #
 # Shebang note: this is Termux-only — it runs `pkg install`, calls
 # termux-setup-storage, etc. Using Termux's bash absolute path means
-# `./init.sh` works directly (Termux has no /usr/bin/env so the more
-# common `#!/usr/bin/env bash` shebang fails to resolve here).
+# `./01-init-termux.sh` works directly (Termux has no /usr/bin/env so
+# the more common `#!/usr/bin/env bash` shebang fails to resolve here).
 #   1. install every package the rest of this dir's scripts depend on
 #   2. shared-storage access (~/storage → /sdcard symlinks)
 #   3. generate this Termux's outbound SSH key (id_ed25519)
@@ -14,7 +14,7 @@
 #   6. start sshd on port 8022
 #
 # Run this once on a fresh Termux install:
-#   curl -fsSL https://raw.githubusercontent.com/rynobey/linux-setups/master/pixel/termux/init.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/rynobey/linux-setups/master/pixel/termux/01-init-termux.sh | bash
 # (or — if you've already pulled the repo manually — just execute it.)
 #
 # Idempotent. Re-running is fine; already-installed packages are no-ops,
@@ -51,7 +51,7 @@ fi
 #   tar, xz-utils    backup compression (xz still useful for incoming
 #                    third-party archives, even though our bundles are
 #                    plain tar streamed through age)
-#   age              passphrase-encrypt the recovery bundle (gather-bundle.sh
+#   age              passphrase-encrypt the recovery bundle (02-snapshot.sh
 #                    + the LXC backup scripts)
 #   nano             on-device editor for quick config tweaks
 #   coreutils        sha256sum, mktemp, etc. (usually present, ensure it)
@@ -166,16 +166,21 @@ log "    boot script that runs 'sshd'."
 log "  - To restart manually later: just type 'sshd' in any Termux session."
 log ""
 log "Next:"
-log "  - Make a recovery snapshot:  $LSDIR/pixel/termux/gather-bundle.sh"
-log "  - After a fresh Termux restore: $LSDIR/pixel/termux/restore-bundle.sh"
+log "  - Make a recovery snapshot:        $LSDIR/pixel/termux/02-snapshot.sh"
+log "  - Restore from a snapshot (rare):  $LSDIR/pixel/termux/03-restore-snapshot.sh"
 log ""
-log "  - Tune Android for VM workloads (frees ~3.5 GB by disabling"
-log "    AiCore + TTS — separate from Podroid, persists across OTAs):"
+log "  - Tune Android for VM workloads (frees ~3.5 GB by disabling AiCore +"
+log "    TTS — system-wide, persists across OTAs):"
 log "      adb pair localhost:<pair-port>      (enter 6-digit code first)"
 log "      adb connect localhost:<connect-port>"
 log "      $LSDIR/pixel/android-pkg-state.sh disable"
 log ""
-log "  - Install / replace Podroid + apply ADB config:"
-log "      $LSDIR/pixel/termux/deploy-podroid.sh"
-log "    (uninstalls old Podroid, installs new APK, applies PPK + AVF"
-log "     + storage perms — assumes ADB is paired + connected already)"
+log "  - Common Podroid workflows live in $LSDIR/pixel/client/ (run after pairing ADB):"
+log "      01-deploy-podroid.sh          install / replace Podroid APK + ADB config"
+log "      02-adb-settings.sh            re-apply PPK + AVF + storage perms"
+log "      03-backup-lxc.sh              create + pull LXC backup"
+log "      04-restore-lxc.sh             push + restore an LXC backup (auto-creates LXC)"
+log "      05-setup-lxc-fresh.sh         full fresh LXC + user + ssh + deps + Tailscale"
+log "      06-bootstrap-ssh-lxc.sh       SSH-only bootstrap inside LXC"
+log "      07-bootstrap-deps-lxc.sh      deps-only bootstrap inside LXC"
+log "      08-install-tailscale-lxc.sh   Tailscale install + auth"

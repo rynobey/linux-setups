@@ -2,15 +2,18 @@
 # Create the privileged Ubuntu LXC ('pubuntu') inside Podroid's Alpine
 # host VM.
 #
-# This script runs ON THE ALPINE HOST (Podroid's primary terminal), NOT
-# inside the LXC. It only handles the host-side concerns: installing
-# lxc tooling if needed, writing a config tuned for Docker + Tailscale
-# inside a privileged LXC, downloading the Ubuntu Noble arm64 rootfs,
-# and starting the container.
+# This script runs ON THE ALPINE HOST, normally streamed via
+# pixel/client/helper/alpine-run.sh from the client. It handles
+# host-side concerns only: installing lxc tooling if needed, writing a
+# config tuned for Docker + Tailscale inside a privileged LXC,
+# downloading the Ubuntu Noble arm64 rootfs, and starting the container.
 #
-# After this completes, run 'lxc-attach -n pubuntu' to drop into the
-# LXC and continue with 02-bootstrap-lxc.sh (and the bootstrap-ssh.sh /
-# bootstrap-git.sh curl-ables — see pixel/README.md).
+# After this completes (or as the next stage of
+# pixel/client/05-setup-lxc-fresh.sh), the in-LXC steps are:
+#   - pixel/lxc/helper/create-user.sh        (user creation)
+#   - pixel/lxc/helper/bootstrap-ssh.sh      (sshd + key + authorize-pubkeys)
+#   - pixel/lxc/helper/bootstrap-deps.sh     (Docker, toolchains, sesh, Node)
+#   - pixel/lxc/helper/install-tailscale.sh  (Tailscale up)
 #
 # Env overrides:
 #   LXC_NAME      default: pubuntu
@@ -33,7 +36,7 @@ LXC_ARCH="${LXC_ARCH:-arm64}"
 SHARED_HOST="${SHARED_HOST:-/mnt/downloads}"
 SHARED_GUEST="${SHARED_GUEST:-mnt/shared}"
 
-log()  { printf '\033[1;34m[01-create-lxc]\033[0m %s\n' "$*"; }
+log()  { printf '\033[1;34m[create-lxc]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; }
 
@@ -92,7 +95,7 @@ fi
 
 sudo tee -a "$config" >/dev/null <<EOF
 
-# --- added by 01-create-lxc.sh ---
+# --- added by create-lxc.sh ---
 
 # Privileged: AppArmor off, drop no capabilities, allow all devices.
 # This is what lets Docker (overlay2, iptables) and Tailscale
@@ -150,21 +153,15 @@ cat <<EOF
 ==============================================================
 LXC '${LXC_NAME}' is up.
 
-Next:
-  1. Attach to the LXC:
-       sudo lxc-attach -n ${LXC_NAME}
+This script is normally called via pixel/client/05-setup-lxc-fresh.sh
+which continues with user creation + SSH + deps + Tailscale. If you
+ran this helper directly, the next phases from your client side are:
 
-  2. (Optionally) create your user:
-       /var/lib/lxc/${LXC_NAME}/rootfs/... — or just from inside the LXC:
-         curl -fsSL https://raw.githubusercontent.com/rynobey/linux-setups/master/bootstrap-ssh.sh | bash
-       (authorizes laptop pubkeys so you can ssh in)
+  pixel/client/06-bootstrap-ssh-lxc.sh   # create user + SSH bootstrap
+  pixel/client/07-bootstrap-deps-lxc.sh  # Docker + sesh + Node + ...
+  pixel/client/08-install-tailscale-lxc.sh
 
-  3. Then from your laptop's ssh session into the LXC:
-         curl -fsSL https://raw.githubusercontent.com/rynobey/linux-setups/master/bootstrap-git.sh | bash
-       (installs git, sets up the LXC's own GitHub key, clones this repo)
-
-  4. Finally, from the cloned repo inside the LXC:
-         ./pixel/podroid/02-bootstrap-lxc.sh
-       (Docker + Tailscale + sesh + nvm/Node, all installed)
+Or attach directly (debug / manual):
+  sudo lxc-attach -n ${LXC_NAME}
 ==============================================================
 EOF

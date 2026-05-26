@@ -3,7 +3,7 @@
 #
 # Run on a freshly-installed Termux:
 #   termux-setup-storage                                        (tap Allow)
-#   bash ~/storage/shared/Download/restore-all.sh
+#   bash ~/storage/shared/Download/03-restore-snapshot.sh
 #
 # What this does:
 #   1. Restore $PREFIX (Termux packages, including age, ssh, etc.) from
@@ -33,7 +33,7 @@ set -euo pipefail
 DL_PRIMARY="$HOME/storage/shared/Download"
 DL_FALLBACK="/sdcard/Download"
 
-log()  { printf '\033[1;34m[restore-all]\033[0m %s\n' "$*"; }
+log()  { printf '\033[1;34m[restore-snapshot]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; }
 
@@ -107,9 +107,10 @@ log "    \$PREFIX from $PREFIX_TAR"
 log "    \$HOME   from $HOME_TAR"
 log ""
 log "Next steps:"
-log "  - If sshd / pubkey-authorize aren't running, run init.sh's later"
+log "  - If sshd / pubkey-authorize aren't running, re-run init's later"
 log "    steps to re-authorize and start sshd:"
-log "      bash ~/linux-setups/pixel/termux/init.sh"
-log "  - For Podroid VM restore (sideload APK + push LXC backup + restore"
-log "    inside Alpine), follow:"
-log "      bash ~/linux-setups/pixel/termux/restore-bundle.sh"
+log "      bash ~/linux-setups/pixel/termux/01-init-termux.sh"
+log "  - For the full Podroid + LXC restore (sideload APK + push backup"
+log "    + restore inside Alpine), use the client/ entry scripts:"
+log "      bash ~/linux-setups/pixel/client/01-deploy-podroid.sh"
+log "      bash ~/linux-setups/pixel/client/04-restore-lxc.sh --latest"

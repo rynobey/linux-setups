@@ -2,148 +2,135 @@
 
 Termux serves two purposes in this setup:
 
-1. **Offline recovery bridge.** When the Pixel is wiped or one of the
-   AVF VMs gets clobbered, Termux is the one Linux environment on the
-   phone that survives because it's a regular Android app on `/sdcard/`-
-   backed storage. Bundling the linux-setups repo + custom Podroid APK
-   + latest VM backups + SSH keys into one `termux-backup` tarball
-   makes the whole rig recoverable from a blank phone with no laptop
-   and no internet.
-2. **Self-contained ops console.** All the laptop-side scripts in this
-   repo (sync-backups, adb-setup, etc.) are pure ssh+scp / adb — so
-   they run identically from Termux on the Pixel itself. Useful when
-   you're away from your laptop.
+1. **Offline recovery bridge.** Termux is the one Linux environment on
+   the Pixel that survives a Podroid wipe, since it's a regular Android
+   app on `/data/data/com.termux/`-backed storage. A recovery bundle of
+   `$PREFIX` + `$HOME` on `/sdcard/Download/` lets you rebuild from a
+   freshly-installed Termux with no laptop and no internet.
 
-## Scripts
+2. **Self-contained ops console.** The same client/ entry scripts that
+   work from a laptop also work from Termux. So everyday workflows
+   (backup, restore, deploy, bootstrap, etc.) can be driven from the
+   Pixel itself. See [`../client/`](../client/) for the entry scripts.
 
-| Script | Runs in | Purpose |
-|---|---|---|
-| [`init.sh`](init.sh) | Termux | One-shot package install + SSH key + repo clone. Run once on fresh Termux. |
-| [`gather-bundle.sh`](gather-bundle.sh) | Termux | Pull latest VM backups + APK + repo state, then `termux-backup` to `/sdcard/`. |
-| [`restore-bundle.sh`](restore-bundle.sh) | Termux | Verify a `termux-restore`'d bundle and print the next-step recovery commands. |
+## What's in this directory
+
+| Script | Purpose |
+|---|---|
+| [`01-init-termux.sh`](01-init-termux.sh) | One-shot fresh Termux setup: packages, storage, ed25519 key, repo clone, sshd. |
+| [`02-snapshot.sh`](02-snapshot.sh) | Create a recovery snapshot: termux-backup of `$PREFIX` + age-encrypted tar of `$HOME` → `/sdcard/Download/`. |
+| [`03-restore-snapshot.sh`](03-restore-snapshot.sh) | Restore from a snapshot on a freshly-installed Termux. |
+
+**The Podroid / LXC workflows aren't in here** — they're in
+[`../client/`](../client/) (cross-context: Termux + laptop). This dir
+only holds Termux-specific entry scripts.
 
 ## First-time setup (fresh Termux)
 
 ```sh
-# In Termux, after install:
-curl -fsSL https://raw.githubusercontent.com/rynobey/linux-setups/master/pixel/termux/init.sh | bash
+# Option A — clone first, then run
+pkg install -y git
+git clone https://github.com/rynobey/linux-setups ~/linux-setups
+bash ~/linux-setups/pixel/termux/01-init-termux.sh
+
+# Option B — direct curl|bash
+curl -fsSL https://raw.githubusercontent.com/rynobey/linux-setups/master/pixel/termux/01-init-termux.sh | bash
 ```
 
-`init.sh` will:
+`01-init-termux.sh` will:
 
 - `pkg install` everything we need (git, openssh, android-tools,
-  termux-tools, termux-api, curl/wget, tar/xz, nano, coreutils)
+  termux-tools, termux-api, curl/wget, tar/xz/age, nano, coreutils)
 - Run `termux-setup-storage` so `~/storage/shared/` maps to `/sdcard/`
-- Generate an `id_ed25519` SSH key for this Termux (if missing)
+- Generate an `id_ed25519` SSH key (if missing)
 - Clone the linux-setups repo into `~/linux-setups`
+- Authorize the repo's `pubkeys/*.pub` into `~/.ssh/authorized_keys`
+- Start `sshd` on port 8022 so other devices can SSH into Termux
 
-After it finishes, copy the printed pubkey to GitHub (so this Termux
-can `git clone` private repos) and to the VMs' `authorized_keys` (so
-the sync/adb scripts can ssh in).
+After it finishes, copy the printed pubkey to GitHub and to the VMs'
+`authorized_keys` (Alpine, pubuntu, Stock Terminal) so the client/
+scripts can ssh in.
 
-## Making a recovery bundle
-
-```sh
-~/linux-setups/pixel/termux/gather-bundle.sh
-```
-
-What this does:
-
-1. `git pull` the linux-setups repo
-2. Sanity-check the custom Podroid APK is at `~/apks/podroid-debug.apk`
-   (downloaded from your GH Actions build — drop it here manually)
-3. Pull the latest backups for both VMs into `~/recovery-bundle/`:
-   - Podroid LXC via `pixel/podroid/sync-backups.sh --pull`
-   - Stock Terminal via `pixel/stock-terminal/sync-backups.sh --pull`
-4. Run `termux-backup` to produce a single `tar.xz` at
-   `~/storage/shared/termux-recovery-<date>.tar.xz`. This file is on
-   Android's public `/sdcard/Download/`, so it survives Termux
-   uninstall, Podroid uninstall, Stock Terminal data-wipe, and every
-   other app-level event short of a full factory reset.
-
-Useful flags:
+## Recovery snapshot
 
 ```sh
-./gather-bundle.sh --skip-sync          # don't try to pull fresh VM backups
-./gather-bundle.sh --skip-apk           # don't fail if APK missing
-./gather-bundle.sh --dest /sdcard/Foo/bundle.tar.xz  # custom output path
+~/linux-setups/pixel/termux/02-snapshot.sh
 ```
 
-Env overrides for the VM connection details:
+Produces three artifacts in `~/storage/shared/Download/`:
 
-- `PODROID_HOST` / `PODROID_PORT` / `PODROID_USER`
-- `TERMINAL_HOST` / `TERMINAL_PORT` / `TERMINAL_USER`
-- `PODROID_APK` (default `~/apks/podroid-debug.apk`)
+1. **`termux-prefix-<date>.tar.xz`** — `termux-backup` of `$PREFIX`
+   (all installed Termux packages). Not encrypted (public package
+   state only).
+2. **`pixel-home-<date>.tar.age`** — full `$HOME` tarball,
+   age-encrypted with a passphrase you provide. Contains your SSH
+   keys, the linux-setups repo, downloaded APKs, and any LXC backups
+   in `~/recovery-bundle/`.
+3. **`03-restore-snapshot.sh`** — copy of this directory's restore
+   script, placed alongside the artifacts so a fresh Termux can find it.
 
-Defaults match what the per-VM `sync-backups.sh` scripts use.
+All three sit on Android public storage, so they survive Termux
+uninstall and even a factory reset (everything short of formatting
+the userdata partition).
+
+⚠ **Test the snapshot decrypts** before relying on it (otherwise a
+passphrase typo silently produces an unrecoverable bundle):
+
+```sh
+age -d ~/storage/shared/Download/pixel-home-*.tar.age | tar tf - | head
+```
 
 ## Bare-phone recovery (no laptop, no internet)
 
 ```
-fresh phone after factory reset
+fresh phone after factory reset / Termux uninstall
     │
-    ├─ Sideload Termux APK from F-Droid (or have it on the SD/USB you boot with)
+    ├─ Sideload Termux APK from F-Droid
     │
     ▼
 Install Termux, open it
     │
     ▼
-termux-restore /sdcard/Download/termux-recovery-<date>.tar.xz
-    │  (Termux now has linux-setups, APK, VM backups, SSH keys, dotfiles)
+termux-setup-storage   (Allow on the popup)
     │
     ▼
-~/linux-setups/pixel/termux/restore-bundle.sh
-    │  (verifies bundle contents, prints next-step commands)
+bash ~/storage/shared/Download/03-restore-snapshot.sh
+    │  Step 1: termux-restore the PREFIX tar — brings back age + ssh + tools
+    │  Step 2: age -d the HOME tar | tar xf -  — brings back ~/.ssh + repo + ...
     │
     ▼
-Follow the printed steps:
-    1. Sideload Podroid APK via termux-open --send ~/apks/podroid-debug.apk
-    2. adb pair / adb-setup.sh from this Termux
-    3. Push backups + restore each VM via the sync-backups.sh scripts
+~/linux-setups/pixel/client/01-deploy-podroid.sh   # install Podroid APK
+~/linux-setups/pixel/client/04-restore-lxc.sh --latest   # restore LXC from bundled backup
 ```
 
 End-to-end recovery in ~30–60 minutes, no laptop, no internet (after
-the initial Termux APK sideload). The custom Podroid build is included
-in the bundle — no need to wait for GH Actions or hit GitHub.
+the initial Termux APK sideload).
 
 ## Periodic refresh
 
-The bundle is only as good as its newest contents. Schedule a refresh
-to whatever cadence matches your tolerance for losing recent state:
+The snapshot is only as good as its newest contents. Schedule it to
+whatever cadence matches your tolerance for losing recent state:
 
 ```sh
-# In Termux:
+# Termux:
 crontab -e
-# add e.g. weekly:
-#   0 3 * * 0  $HOME/linux-setups/pixel/termux/gather-bundle.sh
+# weekly Sunday 3am:
+#   0 3 * * 0  $HOME/linux-setups/pixel/termux/02-snapshot.sh
 ```
 
-(Cron in Termux needs `pkg install cronie` + `crond` running — a
-foreground notification keeps it alive.) Or just run it manually
-before any meaningful work session ends.
+(Cron on Termux needs `pkg install cronie` + `crond` running with a
+foreground notification.) Or just run it manually before stopping work.
 
 ## Security trade-offs
 
-The bundle contains your SSH keys. Treat it accordingly:
-
-- **Where it sits**: `/sdcard/Download/` is readable by any app with
-  `READ_EXTERNAL_STORAGE` (= most apps). Don't trust a phone with
-  arbitrary installs to keep this private.
-- **Encryption**: `termux-backup` produces a plain `tar.xz` —
-  *not* encrypted. If you want passphrase encryption, wrap the
-  output with `age -p`:
-  ```sh
-  ./gather-bundle.sh --dest /tmp/bundle.tar.xz
-  age -p /tmp/bundle.tar.xz > ~/storage/shared/termux-recovery-$(date +%F).tar.xz.age
-  rm /tmp/bundle.tar.xz
-  ```
-  On recovery: `age -d <file>.age > /tmp/bundle.tar.xz && termux-restore /tmp/bundle.tar.xz`.
-- **APK signature**: the custom Podroid APK is signed with whatever
-  local keystore your GH Actions runner generated. Android shows
-  "from unknown source" on install. If you lose the keystore, future
-  upgrades to your fork's APK require uninstall + reinstall.
-
-The VM backups inside the bundle (`pubuntu-*.tar.gz.age`,
-`stock-terminal-*.tar.gz.age`) are already age-encrypted with their
-own passphrases — so even an unencrypted bundle doesn't expose
-the LXC/Terminal data without the per-backup passphrases.
+- `/sdcard/Download/` is readable by any Android app with broad storage
+  permission. The HOME tar is age-encrypted, so the SSH private key is
+  safe behind your passphrase. The PREFIX tar is not encrypted (just
+  package state — no secrets).
+- The Podroid APK signature is from your GH Actions keystore. Future
+  upgrades require the same keystore — back up `~/.android/debug.keystore`
+  separately if losing it would be a problem.
+- The LXC backups inside `~/recovery-bundle/` (which the HOME tar
+  includes) are *individually* age-encrypted with their own passphrases.
+  So the HOME tar passphrase + the LXC backup passphrase are both
+  required to actually restore the VM — slight defense in depth.

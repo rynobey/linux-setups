@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
-# Authorize every *.pub in ../../pubkeys/ for SSH access as the
-# invoking user. Used by 02-bootstrap-lxc.sh; safe to re-run any time
-# after adding a new key to the repo.
+# Authorize every *.pub in <repo>/pubkeys/ for SSH access as the
+# invoking user. Called by lxc/helper/bootstrap-ssh.sh; safe to re-run
+# any time after adding a new key to the repo.
 #
-# Counterpart to ../../bootstrap-ssh.sh — that one fetches pubkeys from
-# the public repo over the network (curl-able for fresh machines).
-# This one reads from the local cloned repo (no network needed).
+# This script lives at <repo>/pixel/lxc/helper/authorize-pubkeys.sh,
+# so the repo root is three levels up. Inside the LXC during a
+# bootstrap run, the whole repo gets tar-streamed to /tmp/lxc-run.XXX/
+# with the same layout, so the same relative walk works there too.
+#
+# Counterpart to <repo>/bootstrap-ssh.sh — that one fetches pubkeys
+# from the public repo over the network (curl-able for fresh machines).
+# This one reads from the local cloned/streamed repo (no network).
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 PUBKEYS_DIR="${PUBKEYS_DIR:-$REPO_ROOT/pubkeys}"
 
 log()  { printf '\033[1;34m[authorize-pubkeys]\033[0m %s\n' "$*"; }

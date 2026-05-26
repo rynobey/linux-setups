@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
-# Bootstrap git on a fresh device: install git, generate this device's
-# own SSH key, walk through adding it to GitHub, then clone the
-# linux-setups repo via SSH so this device can also push.
+# Bootstrap git on a fresh device: install git, walk through adding
+# this device's existing SSH key to GitHub, then clone the linux-setups
+# repo via SSH so this device can also push.
+#
+# Does NOT generate SSH keys anymore — that responsibility moved to
+# bootstrap-ssh.sh (curlable, sister script) and pixel/lxc/helper/
+# bootstrap-ssh.sh (in-LXC). Run one of those first if ~/.ssh/id_ed25519
+# doesn't exist yet — this script will fail-fast otherwise.
 #
 # Run interactively (needs a controlling terminal for the GitHub-paste
-# pause). The GitHub-pubkey-paste prompt reads from /dev/tty so curl|bash
-# works on systems where process substitution doesn't (e.g. minimal Alpine):
+# pause). The prompt reads from /dev/tty so curl|bash works:
 #   curl -fsSL https://raw.githubusercontent.com/rynobey/linux-setups/master/bootstrap-git.sh | bash
-# If that prompt is unhappy, download the file first and run it directly:
+# If that prompt is unhappy, download first:
 #   curl -fsSL https://raw.githubusercontent.com/rynobey/linux-setups/master/bootstrap-git.sh -o bootstrap-git.sh
 #   bash bootstrap-git.sh
 #
@@ -16,8 +20,7 @@
 #   REPO_OWNER        default: rynobey
 #   REPO_NAME         default: linux-setups
 #
-# Idempotent: skips key generation if ~/.ssh/id_ed25519 exists; skips
-# the clone if the target dir already has a .git/.
+# Idempotent: skips the clone if the target dir already has a .git/.
 
 set -euo pipefail
 
@@ -80,18 +83,19 @@ if [ "${#need_install[@]}" -gt 0 ]; then
     pkg_install "${need_install[@]}"
 fi
 
-# ---- generate ed25519 key if missing ---------------------------------------
+# ---- verify SSH key exists -------------------------------------------------
+# Key generation moved to bootstrap-ssh.sh (curlable) and
+# pixel/lxc/helper/bootstrap-ssh.sh (in-LXC). If you're seeing the error
+# below, run one of those first.
 KEY_PATH="$HOME/.ssh/id_ed25519"
-mkdir -p "$HOME/.ssh"
-chmod 700 "$HOME/.ssh"
-
 if [ ! -f "$KEY_PATH" ]; then
-    host_tag=$(hostname 2>/dev/null || echo "device")
-    log "generating ed25519 key at $KEY_PATH (no passphrase)"
-    ssh-keygen -t ed25519 -N "" -C "${USER}@${host_tag}" -f "$KEY_PATH"
-else
-    log "ssh key already at $KEY_PATH — reusing"
+    err "no SSH key at $KEY_PATH — bootstrap-git.sh no longer generates one."
+    err "Run bootstrap-ssh.sh first to create + authorize a key:"
+    err "  curl -fsSL https://raw.githubusercontent.com/rynobey/linux-setups/master/bootstrap-ssh.sh | bash"
+    err "or inside an LXC, run pixel/client/06-bootstrap-ssh-lxc.sh from the client."
+    exit 1
 fi
+log "ssh key present at $KEY_PATH"
 
 # ---- prompt user to add it to GitHub ---------------------------------------
 cat <<EOF

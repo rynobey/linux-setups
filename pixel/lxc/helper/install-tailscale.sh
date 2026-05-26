@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install Tailscale inside the Ubuntu LXC and join the tailnet.
 #
-# Run this AFTER 02-bootstrap-lxc.sh has finished. Split from 02 because
+# Run this AFTER bootstrap-deps.sh has finished. Split from 02 because
 # `tailscale up` reshuffles routing and drops the SSH/lxc-attach session
 # you're running from — making it the final step ensures nothing else
 # is queued behind the disconnect.
@@ -10,7 +10,7 @@
 #   ssh $USER@<TS_HOSTNAME>   (default: pubuntu)
 #
 # Prereq: privileged LXC with /dev/net/tun bind-mounted in (see
-# 01-create-lxc.sh) — without these, tailscaled fails to bring up
+# create-lxc.sh) — without these, tailscaled fails to bring up
 # its userspace TUN interface.
 #
 # Idempotent: re-running upgrades tailscale to the current stable.

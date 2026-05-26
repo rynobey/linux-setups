@@ -6,12 +6,125 @@ hardware-accelerated graphics:
 
 | Side | What it does | Where |
 |---|---|---|
-| **Podroid + Ubuntu LXC** | headless compute — Docker, sesh, dev tools, sshd | [`podroid/`](podroid/) |
+| **Podroid + Ubuntu LXC** | headless compute — Docker, sesh, dev tools, sshd | [`podroid/`](podroid/), [`lxc/`](lxc/) |
 | **Stock Linux Terminal** | GPU-accelerated GUI host — sway tiling WM + foot + browser | [`stock-terminal/`](stock-terminal/) |
 
 Both run on the same Pixel via the **Android Virtualization Framework
 (AVF / pKVM)** — near-native CPU speed, no software emulation. They
 talk to each other (and your laptop) over Tailscale.
+
+## Repo layout
+
+```
+pixel/
+├── client/                # ★ Entry scripts you run from your CLIENT machine
+│   │                        (Termux on the Pixel, or any Linux laptop with
+│   │                         ADB + SSH to the device).
+│   ├── 01-deploy-podroid.sh        # Install/replace Podroid APK + ADB config
+│   ├── 02-adb-settings.sh          # Re-apply PPK + AVF + storage perms
+│   ├── 03-backup-lxc.sh            # Create + pull LXC backup
+│   ├── 04-restore-lxc.sh           # Push + restore backup (auto-creates LXC)
+│   ├── 05-setup-lxc-fresh.sh       # Full fresh LXC + user + ssh + deps + Tailscale
+│   ├── 06-bootstrap-ssh-lxc.sh     # Just SSH bootstrap (key gen + sshd + pubkeys)
+│   ├── 07-bootstrap-deps-lxc.sh    # Just deps (Docker, toolchains, sesh, Node)
+│   ├── 08-install-tailscale-lxc.sh # Just Tailscale install + auth
+│   └── helper/
+│       ├── alpine-run.sh           # Stream a script to Alpine via SSH
+│       ├── lxc-run.sh              # Stream a script to pubuntu via SSH + lxc-attach
+│       └── _lib.sh                 # Shared bash functions
+│
+├── termux/                # Termux-ONLY (only run from inside Termux on the Pixel)
+│   ├── 01-init-termux.sh           # Fresh Termux setup (packages, sshd, key, clone)
+│   ├── 02-snapshot.sh              # Recovery snapshot (PREFIX + HOME → /sdcard)
+│   └── 03-restore-snapshot.sh      # Restore from snapshot on a fresh Termux
+│
+├── podroid/               # Scripts that RUN on Alpine (called via client/helper/alpine-run.sh)
+│   └── helper/
+│       ├── create-lxc.sh           # Bootstrap Alpine + create the LXC shell
+│       ├── backup.sh               # Snapshot the LXC into a .tar.gz.age
+│       ├── restore.sh              # Restore a backup into the LXC
+│       ├── sync-backups.sh         # scp backups between Alpine and a client
+│       └── adb-setup.sh            # ADB-side Podroid config (PPK + AVF perms)
+│
+├── lxc/                   # Scripts that RUN inside pubuntu (called via client/helper/lxc-run.sh)
+│   └── helper/
+│       ├── create-user.sh          # Interactive user creation
+│       ├── bootstrap-ssh.sh        # sshd + key gen + authorize-pubkeys
+│       ├── bootstrap-deps.sh       # Orchestrator: docker + toolchains + sesh + node
+│       ├── install-tailscale.sh    # Tailscale up
+│       ├── install-docker.sh
+│       ├── install-sesh.sh
+│       ├── install-node.sh
+│       ├── install-toolchains.sh
+│       └── authorize-pubkeys.sh
+│
+├── stock-terminal/        # Stock Linux Terminal scripts (GUI side, unchanged scope)
+│   ├── 01-...
+│   └── helper/...
+│
+├── README.md (this file)
+├── android-pkg-state.sh   # Enable/disable Android packages (AiCore, TTS, ...)
+└── android-disabled-packages.md
+```
+
+**The rule of thumb:** if you're invoking a script, look in `client/` or
+`termux/`. Everything in `*/helper/` is called from those entry scripts
+(via `alpine-run.sh` or `lxc-run.sh`) — you don't run them directly.
+
+## Workflows
+
+### From a CLIENT machine (Termux on Pixel, or any Linux laptop)
+
+These work identically from either context. Prerequisites:
+- ADB paired+connected to the Pixel (for ADB-using scripts)
+- SSH access to Alpine on `localhost:9922` (Termux) or `pixel:9922` (laptop via Tailscale)
+- This client's pubkey in Alpine's `/root/.ssh/authorized_keys`
+
+| Workflow | Command |
+|---|---|
+| **a.** Create + sync LXC backup | `bash client/03-backup-lxc.sh` |
+| **b.** Restore an LXC backup (auto-creates LXC if needed) | `bash client/04-restore-lxc.sh` |
+| **c.** Install/replace Podroid + apply ADB config | `bash client/01-deploy-podroid.sh` |
+| **d.** Initial fresh LXC setup (no restore) | `bash client/05-setup-lxc-fresh.sh` |
+| **e.** SSH bootstrap on LXC (incl. key gen if absent) | `bash client/06-bootstrap-ssh-lxc.sh` |
+| **f.** Deps bootstrap on LXC | `bash client/07-bootstrap-deps-lxc.sh` |
+| **g.** Tailscale install + up | `bash client/08-install-tailscale-lxc.sh` |
+| **h.** Additional ADB settings post pair+connect | `bash client/02-adb-settings.sh` |
+
+Each script auto-detects the username (via `/etc/podroid-last-user` written
+by `create-user.sh`), so steps **e**, **f**, **g** can be re-run without
+re-typing the username.
+
+### From Termux on the Pixel (only)
+
+| Workflow | Command |
+|---|---|
+| Fresh Termux setup (packages, sshd, key, clone repo) | `bash termux/01-init-termux.sh` |
+| Make a recovery snapshot (PREFIX + HOME, encrypted) | `bash termux/02-snapshot.sh` |
+| Restore from a snapshot on a fresh Termux | `bash termux/03-restore-snapshot.sh` |
+
+Termux snapshots go to `~/storage/shared/Download/` (i.e. `/sdcard/Download/`)
+so they survive Termux uninstall and even a factory reset.
+
+### From any Linux machine (e.g. ryno-hp)
+
+Same as the Termux table above for **client/**, except the Termux-specific
+snapshot scripts in **termux/** don't apply.
+
+## Memory tuning
+
+The `12 GB` Pixel is tight when the VM runs at 6 GB. Before serious work:
+
+```sh
+# Disable AiCore + TTS — ~3.5 GB Android-side memory back. Persists across reboots.
+# (Re-check after OTAs; OTA can re-enable disabled packages.)
+bash pixel/android-pkg-state.sh disable
+```
+
+Without this, AiCore inference triggers ~3.8 GB DMA-BUF spikes that
+trigger Android's LMK to kill the Podroid app — taking the VM down.
+See [`android-disabled-packages.md`](android-disabled-packages.md) and
+[`podroid/README.md`](podroid/README.md) "Memory tuning" section.
 
 ## Architecture
 
@@ -40,8 +153,7 @@ talk to each other (and your laptop) over Tailscale.
  └──────────────────────────────────────────────────────────────────────┘
 ```
 
-The Stock Terminal does **not** forward X11 from the LXC. The split is
-much cleaner than that:
+The Stock Terminal does **not** forward X11 from the LXC. The split:
 
 - **All GUI apps run inside the Stock Terminal Debian itself** —
   natively, with full Tensor GPU acceleration via Zink/Vulkan.
@@ -50,50 +162,6 @@ much cleaner than that:
 - **Sway, foot, firefox** live on the GUI side because they need the
   GPU; **Docker, dev tools, sesh, project code** live on the LXC side
   because that's the persistent dev environment.
-
-## Bootstrap order (fresh device)
-
-1. **Stock Terminal — one-time hardware accel enable.**
-   See [`stock-terminal/README.md`](stock-terminal/README.md). Pair
-   ADB (or use Termux), `touch /sdcard/linux/virglrenderer`, cold-boot
-   the Terminal app, verify with `glxinfo | grep renderer` →
-   `zink Vulkan 1.3`.
-
-2. **Podroid — install the APK, enable AVF backend.**
-   See [`podroid/README.md`](podroid/README.md) Step 1.
-
-3. **Create the Ubuntu LXC** on the Alpine host inside Podroid:
-   `./podroid/01-create-lxc.sh`.
-
-4. **Create a non-root sudo user** inside the LXC. `lxc-attach` lands
-   you as root, but everything from here runs as a regular user so
-   pubkeys / SSH / git / docker-group land on the right account.
-   See [`podroid/README.md`](podroid/README.md) Step 3 for the
-   curl-able `create-user.sh` invocation.
-
-5. **Bootstrap SSH access** as that user:
-   `curl -fsSL <repo>/bootstrap-ssh.sh | bash`. Your laptop (whose
-   pubkey is in `pubkeys/`) can now SSH in.
-
-6. **Bootstrap git** as that user (so the LXC can also clone/push):
-   `curl -fsSL <repo>/bootstrap-git.sh | bash` — generates the LXC's
-   own key, walks you through adding it to GitHub, clones this repo.
-   (Use `bootstrap-git-public.sh` instead if you only need read access.)
-
-7. **Run the LXC orchestrator** from the cloned repo:
-   `./podroid/02-bootstrap-lxc.sh` — authorizes the rest of `pubkeys/`,
-   installs Docker, sesh, nvm/Node. (Tailscale is intentionally split
-   out — see next step.)
-
-8. **Install Tailscale** as the final LXC step:
-   `./podroid/03-install-tailscale.sh`. `tailscale up` drops the
-   current SSH/lxc-attach session, so it has to be last. Reconnect
-   afterwards via `ssh <user>@pubuntu` (MagicDNS).
-
-9. **GUI side** on the Stock Terminal:
-   `./stock-terminal/install-gui.sh` (sway + foot + firefox), then
-   `./stock-terminal/connect-dev.sh` to drop into a foot terminal
-   pre-SSH'd into the LXC.
 
 ## Why this split
 
@@ -107,10 +175,9 @@ much cleaner than that:
 | WM | sway (in Stock Terminal) | Native Wayland; Stock Terminal's display is Wayland-backed by Zink → smoothest path. Avoids any X11/SSH-forwarding fragility |
 | Persistence | bind-mount `/mnt/shared/projects/` into LXC | Survives Podroid app wipes; `tar` backups of `/var/lib/lxc/pubuntu/` land on the same shared dir |
 
-## Useful pointers
+## Curl-able fresh-machine bootstraps
 
-- [`../bootstrap-ssh.sh`](../bootstrap-ssh.sh) — curl-able SSH bootstrap (any fresh Linux)
-- [`../bootstrap-git.sh`](../bootstrap-git.sh) — curl-able git+ssh-key bootstrap (any fresh Linux)
-- [`../pubkeys/`](../pubkeys/) — public keys authorized for SSH access; drop a new `.pub`, re-run `bootstrap-ssh.sh` or `podroid/authorize-pubkeys.sh`
-- [`android-pkg-state.sh`](android-pkg-state.sh) + [`android-disabled-packages.md`](android-disabled-packages.md) — toggle Android services (AiCore, TTS, …) to free memory for the VM. *Without disabling AiCore, the 6/8 GB Podroid allocations are unstable on a 12 GB Pixel 10 because of inference-time DMA-BUF spikes — see podroid/README.md "Memory tuning" section.*
+- [`../bootstrap-ssh.sh`](../bootstrap-ssh.sh) — sshd + key gen + authorize repo pubkeys (any fresh Linux)
+- [`../bootstrap-git.sh`](../bootstrap-git.sh) — git install + GitHub key-paste flow + clone (assumes ssh key already exists; run bootstrap-ssh.sh first)
+- [`../pubkeys/`](../pubkeys/) — public keys authorized for SSH access; drop a new `.pub`, re-run the appropriate bootstrap-ssh
 - [`../SECURITY.md`](../SECURITY.md) — secrets policy for this repo

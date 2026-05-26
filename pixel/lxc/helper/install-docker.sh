@@ -8,7 +8,7 @@
 #
 # Idempotent: re-running just re-applies the group membership.
 #
-# Prereq: privileged LXC (see 01-create-lxc.sh) — overlay2 + cgroups +
+# Prereq: privileged LXC (see create-lxc.sh) — overlay2 + cgroups +
 # iptables manipulation all need the unconfined apparmor profile and
 # the broad device-allow rules in /var/lib/lxc/pubuntu/config.
 

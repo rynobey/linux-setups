@@ -57,7 +57,7 @@ GRANT_SUDO=1
 read -rp "Grant sudo privileges? [Y/n] " choice
 case "$choice" in
     n|N) GRANT_SUDO=0
-         warn "Without sudo, this user can't run 02-bootstrap-lxc.sh."
+         warn "Without sudo, this user can't run bootstrap-deps.sh / bootstrap-ssh.sh."
          ;;
 esac
 
@@ -86,10 +86,10 @@ if [ "$GRANT_SUDO" -eq 1 ]; then
     usermod -aG sudo "$USERNAME"
 fi
 
-# --- Record the username so callers (e.g. setup-pubuntu-lxc.sh from Termux)
-# can detect which user was just created and chain into a bootstrap-as-user
-# step. Plain file, one line, no metadata. Idempotent — overwritten on each
-# create-user.sh invocation.
+# --- Record the username so callers (e.g. pixel/client/05-setup-lxc-fresh.sh)
+# can detect which user was just created and chain into bootstrap-as-user
+# stages. Plain file, one line, no metadata. Idempotent — overwritten on
+# each create-user.sh invocation.
 echo "$USERNAME" > /etc/podroid-last-user
 chmod 644 /etc/podroid-last-user
 

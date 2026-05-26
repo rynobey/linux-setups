@@ -8,7 +8,7 @@
 #
 # Examples:
 #   bash lxc-run.sh ../podroid/create-user.sh
-#   bash lxc-run.sh --as ryno ../podroid/02-bootstrap-lxc.sh
+#   bash lxc-run.sh --as ryno ../lxc/helper/bootstrap-deps.sh
 #   LXC_NAME=foo LXC_USER=ryno bash lxc-run.sh ../podroid/install-docker.sh
 #
 # By default the script runs inside the LXC as root (uid 0). Pass --as
@@ -94,10 +94,10 @@ fi
 
 LOCAL_SCRIPT_ABS=$(cd "$(dirname "$LOCAL_SCRIPT")" && pwd)/$(basename "$LOCAL_SCRIPT")
 
-# Find the linux-setups repo root: this script is at <root>/pixel/termux/lxc-run.sh,
-# so grandparent of our own location is the repo root.
+# Find the linux-setups repo root: this script is at
+# <root>/pixel/client/helper/lxc-run.sh, so go three levels up.
 LXC_RUN_DIR=$(cd "$(dirname "$0")" && pwd)
-REPO_ROOT=$(cd "$LXC_RUN_DIR/../.." && pwd)
+REPO_ROOT=$(cd "$LXC_RUN_DIR/../../.." && pwd)
 
 # If the user's script lives inside the repo, tar from the repo root and
 # exec at the repo-relative path. Otherwise (one-off external script),
@@ -126,7 +126,7 @@ STATE=$(ssh -p "$ALPINE_PORT" "${ALPINE_USER}@${ALPINE_HOST}" \
 if [ "$STATE" != "RUNNING" ]; then
     err "LXC '$LXC_NAME' is not running (state: ${STATE:-unknown})"
     err "  start it on Alpine first:  lxc-start -n $LXC_NAME"
-    err "  or run pixel/termux/setup-pubuntu-lxc.sh to create+start it"
+    err "  or run pixel/client/05-setup-lxc-fresh.sh to create+start it"
     exit 1
 fi
 

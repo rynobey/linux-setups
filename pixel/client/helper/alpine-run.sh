@@ -6,7 +6,7 @@
 #   bash alpine-run.sh <local-script-path> [args-to-script ...]
 #
 # Examples:
-#   bash alpine-run.sh ../podroid/01-create-lxc.sh
+#   bash alpine-run.sh ../podroid/create-lxc.sh
 #   bash alpine-run.sh ../podroid/backup.sh
 #   bash alpine-run.sh ../podroid/restore.sh --latest
 #   BACKUP_DIR=/tmp/alt bash alpine-run.sh ../podroid/backup.sh
