@@ -116,15 +116,19 @@ if [ "$SKIP_SYNC" -eq 1 ]; then
     log "[3/4] skipping VM sync (--skip-sync); using existing files in $BUNDLE_BACKUPS"
 else
     log "[3/4] pulling Podroid LXC backups → $BUNDLE_BACKUPS"
+    # Invoke sub-scripts via `bash` (not by path) so they work on
+    # Termux too — Termux has no /usr/bin/env, so the `#!/usr/bin/env
+    # bash` shebang fails when the kernel tries to resolve it. `bash
+    # <script>` bypasses the shebang entirely and works everywhere.
     LOCAL_DIR="$BUNDLE_BACKUPS" \
         DEV_HOST="$PODROID_HOST" DEV_PORT="$PODROID_PORT" DEV_USER="$PODROID_USER" \
-        "$LSDIR/pixel/podroid/sync-backups.sh" --pull \
+        bash "$LSDIR/pixel/podroid/sync-backups.sh" --pull \
         || warn "podroid sync failed; using existing files in $BUNDLE_BACKUPS"
 
     log "[3/4] pulling Stock Terminal backups → $BUNDLE_BACKUPS"
     LOCAL_DIR="$BUNDLE_BACKUPS" \
         DEV_HOST="$TERMINAL_HOST" DEV_PORT="$TERMINAL_PORT" DEV_USER="$TERMINAL_USER" \
-        "$LSDIR/pixel/stock-terminal/sync-backups.sh" --pull \
+        bash "$LSDIR/pixel/stock-terminal/sync-backups.sh" --pull \
         || warn "stock-terminal sync failed; using existing files in $BUNDLE_BACKUPS"
 fi
 
