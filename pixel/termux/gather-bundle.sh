@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/data/data/com.termux/files/usr/bin/bash
 # Create a full offline-recoverable snapshot of this Termux + the Pixel
 # Linux setup, and write it to /sdcard/Download. On a fresh phone, the
 # snapshot lets you fully restore in two commands (see Restore below).

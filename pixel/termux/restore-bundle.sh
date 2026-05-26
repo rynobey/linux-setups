@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/data/data/com.termux/files/usr/bin/bash
 # After restore-all.sh has restored $PREFIX and $HOME on a fresh phone,
 # this script walks you through the app-side recovery: verifies the
 # bundle contents are present, prints the next-step commands for the

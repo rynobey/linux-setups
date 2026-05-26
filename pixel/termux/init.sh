@@ -1,5 +1,10 @@
-#!/usr/bin/env bash
+#!/data/data/com.termux/files/usr/bin/bash
 # One-shot initial Termux setup. Six steps:
+#
+# Shebang note: this is Termux-only — it runs `pkg install`, calls
+# termux-setup-storage, etc. Using Termux's bash absolute path means
+# `./init.sh` works directly (Termux has no /usr/bin/env so the more
+# common `#!/usr/bin/env bash` shebang fails to resolve here).
 #   1. install every package the rest of this dir's scripts depend on
 #   2. shared-storage access (~/storage → /sdcard symlinks)
 #   3. generate this Termux's outbound SSH key (id_ed25519)
@@ -161,9 +166,16 @@ log "    boot script that runs 'sshd'."
 log "  - To restart manually later: just type 'sshd' in any Termux session."
 log ""
 log "Next:"
-log "  - Make a recovery bundle:  $LSDIR/pixel/termux/gather-bundle.sh"
+log "  - Make a recovery snapshot:  $LSDIR/pixel/termux/gather-bundle.sh"
 log "  - After a fresh Termux restore: $LSDIR/pixel/termux/restore-bundle.sh"
-log "  - Run device-side ADB config:"
-log "      $LSDIR/pixel/podroid/adb-setup.sh"
-log "      $LSDIR/pixel/stock-terminal/adb-setup.sh"
-log "    (pair ADB first with: adb pair localhost:<port>)"
+log ""
+log "  - Tune Android for VM workloads (frees ~3.5 GB by disabling"
+log "    AiCore + TTS — separate from Podroid, persists across OTAs):"
+log "      adb pair localhost:<pair-port>      (enter 6-digit code first)"
+log "      adb connect localhost:<connect-port>"
+log "      $LSDIR/pixel/android-pkg-state.sh disable"
+log ""
+log "  - Install / replace Podroid + apply ADB config:"
+log "      $LSDIR/pixel/termux/deploy-podroid.sh"
+log "    (uninstalls old Podroid, installs new APK, applies PPK + AVF"
+log "     + storage perms — assumes ADB is paired + connected already)"
