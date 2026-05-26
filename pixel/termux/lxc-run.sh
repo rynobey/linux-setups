@@ -13,11 +13,13 @@
 #
 # How it works:
 #   1. SSH preflight + verify the LXC is running.
-#   2. tar up the script's PARENT DIRECTORY locally — so sibling scripts
-#      like authorize-pubkeys.sh / install-docker.sh that 02-bootstrap-lxc.sh
-#      references via $SCRIPT_DIR/foo.sh come along automatically. Without
-#      this, only the entry script would land inside the LXC and any
-#      "$SCRIPT_DIR/sibling.sh" call would fail with "No such file".
+#   2. tar up the WHOLE linux-setups repo (minus .git) — the script will
+#      be exec'd at its repo-relative path inside the LXC, so any
+#      reference it makes via $SCRIPT_DIR/sibling.sh OR $SCRIPT_DIR/../..
+#      resolves the same way it would in your local checkout. Critical
+#      for things like authorize-pubkeys.sh that walk up to find
+#      ../../pubkeys/ at the repo root. Cost is tiny — the whole repo
+#      minus .git is well under a megabyte.
 #   3. mktemp a working dir inside the LXC's rootfs on Alpine — path looks
 #      like /var/lib/lxc/$LXC_NAME/rootfs/tmp/lxc-run.XXXXXX from Alpine,
 #      but the same dir appears as /tmp/lxc-run.XXXXXX from inside the
@@ -73,8 +75,25 @@ if [ ! -f "$LOCAL_SCRIPT" ]; then
 fi
 
 LOCAL_SCRIPT_ABS=$(cd "$(dirname "$LOCAL_SCRIPT")" && pwd)/$(basename "$LOCAL_SCRIPT")
-SCRIPT_DIR=$(dirname "$LOCAL_SCRIPT_ABS")
-SCRIPT_NAME=$(basename "$LOCAL_SCRIPT_ABS")
+
+# Find the linux-setups repo root: this script is at <root>/pixel/termux/lxc-run.sh,
+# so grandparent of our own location is the repo root.
+LXC_RUN_DIR=$(cd "$(dirname "$0")" && pwd)
+REPO_ROOT=$(cd "$LXC_RUN_DIR/../.." && pwd)
+
+# If the user's script lives inside the repo, tar from the repo root and
+# exec at the repo-relative path. Otherwise (one-off external script),
+# fall back to tar'ing just the script's parent directory.
+case "$LOCAL_SCRIPT_ABS" in
+    "$REPO_ROOT"/*)
+        TAR_ROOT="$REPO_ROOT"
+        SCRIPT_RELPATH="${LOCAL_SCRIPT_ABS#$REPO_ROOT/}"
+        ;;
+    *)
+        TAR_ROOT=$(dirname "$LOCAL_SCRIPT_ABS")
+        SCRIPT_RELPATH=$(basename "$LOCAL_SCRIPT_ABS")
+        ;;
+esac
 
 # ---- 2. SSH preflight + verify the LXC is running -------------------------
 if ! ssh -p "$ALPINE_PORT" -o ConnectTimeout=5 -o BatchMode=yes \
@@ -101,11 +120,12 @@ REMOTE_DIR=$(ssh -p "$ALPINE_PORT" "${ALPINE_USER}@${ALPINE_HOST}" \
 # Path as seen from INSIDE the LXC (strips the rootfs prefix → /tmp/lxc-run.XXX)
 LXC_INTERNAL_DIR="${REMOTE_DIR#$LXC_ROOTFS}"
 
-# ---- 4. tar the script's parent dir, stream + extract on Alpine -----------
-# All sibling scripts (authorize-pubkeys.sh, install-*.sh, etc.) come along.
-# Cost is negligible — these dirs are <100 KB total.
-log "packaging $(basename "$SCRIPT_DIR")/ → ${LXC_NAME}:${LXC_INTERNAL_DIR}/"
-tar -C "$SCRIPT_DIR" -cf - . \
+# ---- 4. tar the chosen root, stream + extract on Alpine -------------------
+# When TAR_ROOT is the linux-setups repo root, this carries pubkeys/ and
+# every other repo-relative dependency the in-LXC script might reach for.
+# .git is excluded to keep the payload small.
+log "packaging $(basename "$TAR_ROOT")/ → ${LXC_NAME}:${LXC_INTERNAL_DIR}/"
+tar -C "$TAR_ROOT" --exclude='./.git' --exclude='./.git/*' -cf - . \
     | ssh -p "$ALPINE_PORT" "${ALPINE_USER}@${ALPINE_HOST}" \
             "tar -xf - -C $REMOTE_DIR && chmod -R +x $REMOTE_DIR"
 
@@ -122,12 +142,12 @@ for a in "$@"; do
     QUOTED_ARGS+=" $(printf '%q' "$a")"
 done
 
-log "running $SCRIPT_NAME$QUOTED_ARGS inside LXC '$LXC_NAME'"
+log "running $SCRIPT_RELPATH$QUOTED_ARGS inside LXC '$LXC_NAME'"
 
 # ---- 6. exec with TTY through lxc-attach ----------------------------------
 EXIT_CODE=0
 ssh -t -p "$ALPINE_PORT" "${ALPINE_USER}@${ALPINE_HOST}" \
-    "trap 'rm -rf $REMOTE_DIR' EXIT; lxc-attach -n $LXC_NAME -- ${ENV_PREFIX}bash $LXC_INTERNAL_DIR/$SCRIPT_NAME$QUOTED_ARGS" \
+    "trap 'rm -rf $REMOTE_DIR' EXIT; lxc-attach -n $LXC_NAME -- ${ENV_PREFIX}bash $LXC_INTERNAL_DIR/$SCRIPT_RELPATH$QUOTED_ARGS" \
     || EXIT_CODE=$?
 
 exit $EXIT_CODE
