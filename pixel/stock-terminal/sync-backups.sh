@@ -53,7 +53,16 @@ DEV_HOST="${DEV_HOST:-stock-terminal}"
 DEV_PORT="${DEV_PORT:-22}"
 DEV_USER="${DEV_USER:-droid}"
 REMOTE_DIR="${REMOTE_DIR:-/var/lib/stock-terminal-backups}"
-LOCAL_DIR="${LOCAL_DIR:-$HOME/stock-terminal-backups}"
+
+# Local-side directory varies by context, same logic as the podroid
+# sync-backups.sh: Termux uses ~/recovery-bundle (shared with the
+# gather/restore flow), other hosts use a script-specific default.
+if [ -n "${PREFIX:-}" ] && [ -x "${PREFIX}/bin/pkg" ]; then
+    LOCAL_DIR_DEFAULT="$HOME/recovery-bundle"
+else
+    LOCAL_DIR_DEFAULT="$HOME/stock-terminal-backups"
+fi
+LOCAL_DIR="${LOCAL_DIR:-$LOCAL_DIR_DEFAULT}"
 
 MODE=pull
 DELETE_AFTER=0

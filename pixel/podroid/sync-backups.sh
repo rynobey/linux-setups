@@ -73,7 +73,20 @@ DEV_HOST="${DEV_HOST:-$DEV_HOST_DEFAULT}"
 DEV_PORT="${DEV_PORT:-9922}"
 DEV_USER="${DEV_USER:-root}"
 REMOTE_DIR="${REMOTE_DIR:-/var/lib/podroid-backups}"
-LOCAL_DIR="${LOCAL_DIR:-$HOME/podroid-backups}"
+
+# Local-side directory varies by context:
+#   - On Termux on the Pixel: gather-bundle.sh pulls into ~/recovery-bundle/,
+#     and the recovery flow extracts the bundle into the same path. Default
+#     to that so a stand-alone `sync-backups.sh --push` Just Works without
+#     needing --local.
+#   - Elsewhere (laptop, server): use ~/podroid-backups/ — generic name
+#     for the place where the laptop stashes pulled backups.
+if [ -n "${PREFIX:-}" ] && [ -x "${PREFIX}/bin/pkg" ]; then
+    LOCAL_DIR_DEFAULT="$HOME/recovery-bundle"
+else
+    LOCAL_DIR_DEFAULT="$HOME/podroid-backups"
+fi
+LOCAL_DIR="${LOCAL_DIR:-$LOCAL_DIR_DEFAULT}"
 
 MODE=pull
 DELETE_AFTER=0
