@@ -54,8 +54,12 @@
 #   - SSH keys set up to reach the Podroid LXC (or use --skip-sync)
 #
 # Env / flags:
-#   --skip-sync                 skip pulling fresh Podroid LXC backups
-#                               (use existing ones in ~/recovery-bundle/)
+#   --skip-sync                 skip the LXC backup + sync stage entirely
+#                               (use existing files in ~/recovery-bundle/)
+#   --skip-fresh-backup         don't trigger a NEW Podroid LXC backup —
+#                               just pull whatever's already on Alpine.
+#                               (Faster, but only useful if you JUST made
+#                               a backup. Default is to create a fresh one.)
 #   --skip-apk                  don't fail if the custom Podroid APK is missing
 #   --include-stock-terminal    also sync Stock Terminal VM backups
 #                               (off by default since you may not have it set up)
@@ -105,6 +109,7 @@ SKIP_SYNC=0
 SKIP_APK=0
 SKIP_PREFIX=0
 SKIP_HOME=0
+SKIP_FRESH_BACKUP=0
 INCLUDE_STOCK_TERMINAL=0
 DEST_DIR=""
 
@@ -114,6 +119,7 @@ while [ $# -gt 0 ]; do
         --skip-apk)               SKIP_APK=1; shift ;;
         --skip-prefix)            SKIP_PREFIX=1; shift ;;
         --skip-home)              SKIP_HOME=1; shift ;;
+        --skip-fresh-backup)      SKIP_FRESH_BACKUP=1; shift ;;
         --include-stock-terminal) INCLUDE_STOCK_TERMINAL=1; shift ;;
         --dest-dir)               DEST_DIR="$2"; shift 2 ;;
         -h|--help)                sed -n '2,78p' "$0"; exit 0 ;;
@@ -194,26 +200,38 @@ BUNDLE_BACKUPS="$HOME/recovery-bundle"
 mkdir -p "$BUNDLE_BACKUPS"
 
 if [ "$SKIP_SYNC" -eq 1 ]; then
-    log "[3/6] skipping VM sync (--skip-sync); using existing files in $BUNDLE_BACKUPS"
-else
-    log "[3/6] pulling Podroid LXC backups → $BUNDLE_BACKUPS"
-    # Invoke sub-scripts via `bash` (not by path) so they work on
-    # Termux too — Termux has no /usr/bin/env, so the `#!/usr/bin/env
-    # bash` shebang fails when the kernel tries to resolve it.
+    log "[3/6] skipping VM backup + sync (--skip-sync); using existing files in $BUNDLE_BACKUPS"
+elif [ "$SKIP_FRESH_BACKUP" -eq 1 ]; then
+    log "[3/6] --skip-fresh-backup: pulling EXISTING Podroid LXC backups → $BUNDLE_BACKUPS"
+    # Sync only, don't trigger a new backup on Alpine.
     LOCAL_DIR="$BUNDLE_BACKUPS" \
         DEV_HOST="$PODROID_HOST" DEV_PORT="$PODROID_PORT" DEV_USER="$PODROID_USER" \
         bash "$LSDIR/pixel/podroid/helper/sync-backups.sh" --pull \
         || warn "podroid sync failed; using existing files in $BUNDLE_BACKUPS"
+else
+    log "[3/6] creating FRESH Podroid LXC backup + syncing → $BUNDLE_BACKUPS"
+    log "       (passphrase prompt incoming — pick something you'll remember)"
+    # Delegate to client/03-backup-lxc.sh which does the full
+    # backup-on-Alpine + sync-to-client flow. ALPINE_* env vars are how
+    # the client/ scripts know which Alpine to talk to; we forward our
+    # PODROID_* defaults so 02-snapshot.sh's existing env overrides
+    # still work.
+    ALPINE_HOST="$PODROID_HOST" ALPINE_PORT="$PODROID_PORT" ALPINE_USER="$PODROID_USER" \
+        bash "$LSDIR/pixel/client/03-backup-lxc.sh" \
+            --local "$BUNDLE_BACKUPS" \
+        || warn "podroid backup+sync failed; falling back to existing files in $BUNDLE_BACKUPS"
+fi
 
-    if [ "$INCLUDE_STOCK_TERMINAL" -eq 1 ]; then
-        log "[3/6] pulling Stock Terminal backups → $BUNDLE_BACKUPS"
-        LOCAL_DIR="$BUNDLE_BACKUPS" \
-            DEV_HOST="$TERMINAL_HOST" DEV_PORT="$TERMINAL_PORT" DEV_USER="$TERMINAL_USER" \
-            bash "$LSDIR/pixel/stock-terminal/sync-backups.sh" --pull \
-            || warn "stock-terminal sync failed; using existing files in $BUNDLE_BACKUPS"
-    else
-        log "[3/6] skipping Stock Terminal sync (default; pass --include-stock-terminal to enable)"
-    fi
+# Stock Terminal — separate from the Podroid flow above. Always sync-only
+# (no fresh backup wrapper for the Stock Terminal yet); enable via flag.
+if [ "$SKIP_SYNC" -eq 0 ] && [ "$INCLUDE_STOCK_TERMINAL" -eq 1 ]; then
+    log "[3/6] pulling Stock Terminal backups → $BUNDLE_BACKUPS"
+    LOCAL_DIR="$BUNDLE_BACKUPS" \
+        DEV_HOST="$TERMINAL_HOST" DEV_PORT="$TERMINAL_PORT" DEV_USER="$TERMINAL_USER" \
+        bash "$LSDIR/pixel/stock-terminal/sync-backups.sh" --pull \
+        || warn "stock-terminal sync failed; using existing files in $BUNDLE_BACKUPS"
+elif [ "$SKIP_SYNC" -eq 0 ] && [ "$INCLUDE_STOCK_TERMINAL" -eq 0 ]; then
+    log "[3/6]       skipping Stock Terminal (pass --include-stock-terminal to enable)"
 fi
 
 backup_count=$(find "$BUNDLE_BACKUPS" -maxdepth 1 -type f \
@@ -259,6 +277,26 @@ else
     fi
     home_size=$(du -h "$HOME_DEST" | awk '{print $1}')
     log "      \$HOME bundle: $home_size at $HOME_DEST"
+
+    # ---- 5b. test-decrypt verification ----------------------------------
+    # age -p's "type passphrase twice to confirm" catches single-keystroke
+    # typos but NOT consistent ones (typing the same wrong passphrase
+    # twice passes the confirm check). The only thing that proves the
+    # backup is recoverable is an actual decrypt attempt. Prompts the
+    # user a THIRD time for the same passphrase and verifies age can
+    # decrypt the first 4 KB. If it can't, deletes the unreadable file
+    # so a future restore doesn't waste time on a doomed artifact.
+    log ""
+    log "      verifying \$HOME bundle decrypts — enter the SAME passphrase ONCE MORE"
+    bytes=$(age -d "$HOME_DEST" 2>/dev/null | head -c 4096 | wc -c | tr -d ' ')
+    if [ "${bytes:-0}" -gt 0 ]; then
+        log "      ✓ passphrase verified ($bytes bytes test-decrypted)"
+    else
+        err "      ✗ DECRYPT FAILED — your passphrase doesn't match the file."
+        err "      Removing unreadable file: $HOME_DEST"
+        rm -f "$HOME_DEST"
+        exit 1
+    fi
 fi
 
 # ---- 6. drop the 03-restore-snapshot.sh script next to the artifacts ---------------

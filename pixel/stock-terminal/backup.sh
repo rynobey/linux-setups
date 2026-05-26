@@ -161,6 +161,24 @@ if [ "$ENCRYPT" -eq 1 ]; then
     log "you'll be prompted for a passphrase — remember it; restore needs the same one"
     sudo tar -czpf - "${existing_paths[@]}" 2>/dev/null | age -p -o "$out"
     sudo chmod 600 "$out"
+
+    # ---- test-decrypt verification --------------------------------------
+    # age -p's confirm-by-retyping catches single-keystroke typos but not
+    # consistent ones. The only proof the backup is recoverable is an
+    # actual decrypt attempt — prompt for the SAME passphrase one more
+    # time and verify the first 4 KB decrypts. If not, remove the file
+    # so a future restore doesn't waste time on a doomed artifact.
+    log ""
+    log "verifying $out decrypts — enter the SAME passphrase ONCE MORE"
+    bytes=$(age -d "$out" 2>/dev/null | head -c 4096 | wc -c | tr -d ' ')
+    if [ "${bytes:-0}" -gt 0 ]; then
+        log "✓ passphrase verified ($bytes bytes test-decrypted)"
+    else
+        err "✗ DECRYPT FAILED — your passphrase doesn't match the file."
+        err "  Removing unreadable file: $out"
+        sudo rm -f "$out"
+        exit 1
+    fi
 else
     out="${BACKUP_DIR}/${BACKUP_PREFIX}-${stamp}.tar.gz"
     log "writing $out (UNENCRYPTED)"
