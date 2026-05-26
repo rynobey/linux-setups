@@ -46,7 +46,7 @@ if [ -n "${PREFIX:-}" ] && [ -x "${PREFIX}/bin/pkg" ]; then
     err "  # then drop your laptop's pubkey into ~/.ssh/authorized_keys"
     err ""
     err "if you wanted the linux-setups repo + tools set up on Termux,"
-    err "use pixel/termux/init.sh instead — it covers the Termux path."
+    err "use pixel/termux/01-init-termux.sh instead — it covers the Termux path."
     exit 1
 fi
 

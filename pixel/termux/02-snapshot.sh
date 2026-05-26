@@ -116,7 +116,7 @@ while [ $# -gt 0 ]; do
         --skip-home)              SKIP_HOME=1; shift ;;
         --include-stock-terminal) INCLUDE_STOCK_TERMINAL=1; shift ;;
         --dest-dir)               DEST_DIR="$2"; shift 2 ;;
-        -h|--help)                sed -n '2,60p' "$0"; exit 0 ;;
+        -h|--help)                sed -n '2,78p' "$0"; exit 0 ;;
         *) echo "unknown arg: $1" >&2; exit 1 ;;
     esac
 done
@@ -125,7 +125,11 @@ if [ -z "$DEST_DIR" ]; then
     DEST_DIR="$HOME/storage/shared/Download"
 fi
 
-DATE_TAG=$(date +%F)
+# YYYY-MM-DD-HHMM so consecutive same-day runs produce distinct files.
+# termux-backup refuses to overwrite without --force, so a same-name
+# collision aborts the snapshot mid-flight — using minute-resolution
+# in the filename sidesteps that entirely.
+DATE_TAG=$(date +%F-%H%M)
 PREFIX_DEST="$DEST_DIR/termux-prefix-$DATE_TAG.tar.xz"
 HOME_DEST="$DEST_DIR/pixel-home-$DATE_TAG.tar.age"
 RESTORE_SCRIPT_DEST="$DEST_DIR/03-restore-snapshot.sh"
@@ -198,7 +202,7 @@ else
     # bash` shebang fails when the kernel tries to resolve it.
     LOCAL_DIR="$BUNDLE_BACKUPS" \
         DEV_HOST="$PODROID_HOST" DEV_PORT="$PODROID_PORT" DEV_USER="$PODROID_USER" \
-        bash "$LSDIR/pixel/podroid/sync-backups.sh" --pull \
+        bash "$LSDIR/pixel/podroid/helper/sync-backups.sh" --pull \
         || warn "podroid sync failed; using existing files in $BUNDLE_BACKUPS"
 
     if [ "$INCLUDE_STOCK_TERMINAL" -eq 1 ]; then

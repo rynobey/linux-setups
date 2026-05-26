@@ -2,7 +2,7 @@
 # Snapshot the Stock Linux Terminal VM's configuration + package set to
 # an encrypted tarball on the shared Android storage.
 #
-# Important design difference vs pixel/podroid/backup.sh:
+# Important design difference vs pixel/podroid/helper/backup.sh:
 #   - Podroid's backup tars the WHOLE LXC rootfs from the Alpine host.
 #     The Stock Terminal VM's disk image lives in the app's private dir
 #     (/data/user/0/com.android.virtualization.terminal/files/), which is

@@ -11,7 +11,7 @@
 # That's the only ADB-side step for the Stock Terminal — it's a
 # privileged system app, so the AVF permissions and storage perms
 # Podroid needs are pre-granted by AOSP. If you want the Podroid
-# ADB config too, run pixel/podroid/adb-setup.sh separately.
+# ADB config too, run pixel/podroid/helper/adb-setup.sh separately.
 #
 # Run from any host with ADB connected to the Pixel (laptop, Termux,
 # etc.). Pair ADB manually per the README first.
