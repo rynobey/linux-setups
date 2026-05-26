@@ -142,10 +142,16 @@ LXC_INTERNAL_DIR="${REMOTE_DIR#$LXC_ROOTFS}"
 # When TAR_ROOT is the linux-setups repo root, this carries pubkeys/ and
 # every other repo-relative dependency the in-LXC script might reach for.
 # .git is excluded to keep the payload small.
+#
+# chmod a+rX after extract: mktemp -d creates the dir 0700 (root-only),
+# so without this any --as <user> invocation can't read its own scripts.
+# `a+rX` adds read for everyone, plus execute on directories only (capital
+# X). Keeps the regular files at their tar-extracted mode but ensures the
+# whole tree is traversable + readable by non-root users.
 log "packaging $(basename "$TAR_ROOT")/ → ${LXC_NAME}:${LXC_INTERNAL_DIR}/"
 tar -C "$TAR_ROOT" --exclude='./.git' --exclude='./.git/*' -cf - . \
     | ssh -p "$ALPINE_PORT" "${ALPINE_USER}@${ALPINE_HOST}" \
-            "tar -xf - -C $REMOTE_DIR && chmod -R +x $REMOTE_DIR"
+            "tar -xf - -C $REMOTE_DIR && chmod -R a+rX $REMOTE_DIR && chmod a+rx $REMOTE_DIR"
 
 # ---- 5. build env-var preamble + arg quoting -------------------------------
 ENV_PREFIX=""
@@ -161,18 +167,23 @@ for a in "$@"; do
 done
 
 # ---- 6. exec with TTY through lxc-attach ----------------------------------
-# When LXC_USER is set, wrap the in-LXC command in `runuser -l <user> -c`
-# so the script runs as that user (with the user's $HOME / $USER set,
-# and starting in their home dir). We're already root inside the LXC
-# via lxc-attach, so runuser doesn't prompt for a password — but any
-# `sudo` inside the script will prompt for the user's password (cached
-# for ~15 min after first entry).
+# When LXC_USER is set, wrap the in-LXC command in `runuser --pty -l`:
+#   -l  : login shell — sources /etc/profile, ~/.profile, sets $HOME,
+#         $USER, cd's into $HOME.
+#   --pty: allocates a NEW pseudo-terminal for the user's session. This
+#         is the critical bit. Without --pty, login mode runs setsid(),
+#         detaching from the inherited PTY, so any subsequent sudo
+#         inside the user's script fails with "a terminal is required
+#         to read the password". The --pty bridge gives sudo something
+#         to read its password prompt from.
+#
+# We're already root inside the LXC via lxc-attach, so runuser itself
+# doesn't prompt for a password — only sudo inside the user's script
+# will (cached for ~15 min after first entry).
 INNER_CMD="${ENV_PREFIX}bash $LXC_INTERNAL_DIR/$SCRIPT_RELPATH$QUOTED_ARGS"
 if [ -n "$LXC_USER" ]; then
     log "running $SCRIPT_RELPATH$QUOTED_ARGS inside LXC '$LXC_NAME' as user '$LXC_USER'"
-    # Ensure the user can read the temp dir even if extracted as root
-    PREP_CMD="chown -R $LXC_USER: $LXC_INTERNAL_DIR && cd ~$LXC_USER &&"
-    INNER_CMD="$PREP_CMD runuser -l $(printf '%q' "$LXC_USER") -c $(printf '%q' "$INNER_CMD")"
+    INNER_CMD="runuser --pty -l $(printf '%q' "$LXC_USER") -c $(printf '%q' "$INNER_CMD")"
 else
     log "running $SCRIPT_RELPATH$QUOTED_ARGS inside LXC '$LXC_NAME' as root"
 fi
