@@ -112,4 +112,5 @@ much cleaner than that:
 - [`../bootstrap-ssh.sh`](../bootstrap-ssh.sh) — curl-able SSH bootstrap (any fresh Linux)
 - [`../bootstrap-git.sh`](../bootstrap-git.sh) — curl-able git+ssh-key bootstrap (any fresh Linux)
 - [`../pubkeys/`](../pubkeys/) — public keys authorized for SSH access; drop a new `.pub`, re-run `bootstrap-ssh.sh` or `podroid/authorize-pubkeys.sh`
+- [`android-pkg-state.sh`](android-pkg-state.sh) + [`android-disabled-packages.md`](android-disabled-packages.md) — toggle Android services (AiCore, TTS, …) to free memory for the VM. *Without disabling AiCore, the 6/8 GB Podroid allocations are unstable on a 12 GB Pixel 10 because of inference-time DMA-BUF spikes — see podroid/README.md "Memory tuning" section.*
 - [`../SECURITY.md`](../SECURITY.md) — secrets policy for this repo

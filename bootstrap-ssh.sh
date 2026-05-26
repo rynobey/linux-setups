@@ -29,6 +29,25 @@ if [ "$(id -u)" -eq 0 ]; then
     warn "if you meant to authorize a regular user, ctrl-c and re-run as them."
 fi
 
+# ---- Termux guard ----------------------------------------------------------
+# bootstrap-ssh.sh sets up incoming-sshd on a Linux host (Alpine/Ubuntu/
+# Debian) via apt/apk + systemctl/rc-service. None of that applies to
+# Termux, which has its own sshd flow via `pkg install openssh + sshd`
+# and writes authorized_keys to ~/.ssh/ in the user dir. Bail with a
+# pointer instead of failing in a confusing way.
+if [ -n "${PREFIX:-}" ] && [ -x "${PREFIX}/bin/pkg" ]; then
+    err "this script targets Linux hosts (Alpine/Ubuntu/Debian), not Termux."
+    err ""
+    err "if you want incoming SSH on Termux specifically:"
+    err "  pkg install -y openssh"
+    err "  sshd                              # starts on port 8022 by default"
+    err "  # then drop your laptop's pubkey into ~/.ssh/authorized_keys"
+    err ""
+    err "if you wanted the linux-setups repo + tools set up on Termux,"
+    err "use pixel/termux/init.sh instead — it covers the Termux path."
+    exit 1
+fi
+
 # ---- package manager detection ---------------------------------------------
 if command -v apt-get >/dev/null 2>&1; then
     PKG_FAMILY=apt

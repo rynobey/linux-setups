@@ -86,9 +86,20 @@ The Stock Terminal side handles GUI / GPU stuff — see
    show in the picker, re-check step 3 (perms not granted or wrong
    package).
 
-5. Allocate RAM: 8 GB is a reasonable default on a 12 GB Pixel 10 (leaves
-   headroom for Android + foreground app). The 6 / 8 GB tiers are only
-   present on the custom debug build; stock caps at 4 GB.
+5. Allocate RAM. On a 12 GB Pixel 10, the safe allocation depends on
+   what's running on the Android side — Pixel's AI/system services
+   easily consume 4-5 GB of "always on" memory. **Empirically validated
+   on Pixel 10 / Android 16:**
+
+   | Allocation | Safe if… | Notes |
+   |---|---|---|
+   | **2 GB** | Always | Bulletproof; backups always work; fine for daily dev (LXC working set fits easily) |
+   | **4 GB** | Default Android baseline | Works for daily dev; backups risky without page-cache mitigation |
+   | **6 GB** | AiCore + TTS disabled (see *Memory tuning* below) | Works for backups + heavy ops once Android baseline is trimmed |
+   | **8 GB** | Most user apps + AiCore + TTS disabled | Possible but tight; one runaway app from LMK kill |
+
+   The 6 / 8 GB tiers exist only in the custom debug build; stock Podroid
+   caps at 4 GB.
 
 6. Settings → **Storage access** → ON. (Note: the AVF SharedPath into
    `/sdcard/` is silently dropped on current Pixel 10 / Android 16
@@ -115,6 +126,58 @@ is granted, (3) `USE_CUSTOM_VIRTUAL_MACHINE` is granted, (4) the device
 advertises non-protected VM support. All four must pass or it falls back
 to TCG silently. The explicit AVF (KVM) backend toggle is your safety
 net to avoid the fallback.
+
+### Memory tuning — disable Android services that compete with the VM
+
+Skip this section if you're staying on a small (2 GB) VM allocation.
+**Required for stable 6 / 8 GB allocation.**
+
+Pixel's on-device AI service (`com.google.android.aicore`) holds up to
+**3.8 GB of Tensor / DMA-BUF memory** when actively running inference
+(Magic Compose, Smart Reply, Now Brief, etc.). It's only ~130 MB at
+idle, but **the spike triggers Low-Memory-Killer kills of Podroid**
+whenever AiCore happens to be inferring during a memory-heavy VM
+operation (backup, big build). That's not theoretical — it's exactly
+how the 6 GB VM was reproducibly killed before AiCore was disabled,
+and reproducibly successful afterwards.
+
+The fix: `pm disable-user` the packages that cost more than they're
+worth to you. Reversible any time. See
+[`../android-disabled-packages.md`](../android-disabled-packages.md)
+for what each one controls and how to re-enable.
+
+Quick start, via the helper:
+
+```sh
+cd ~/projects/linux-setups
+./pixel/android-pkg-state.sh status      # see current state + memory
+./pixel/android-pkg-state.sh disable     # disable AiCore + TTS (default tracked list)
+./pixel/android-pkg-state.sh enable      # restore them later if you want
+```
+
+Measured impact on a Pixel 10 / 12 GB / Android 16, after running
+`disable`:
+
+- MemAvailable: 764 MB → **4.31 GB**
+- ZRAM swapped: 4.5 GB → 3.1 GB (apps that were paged out got revived)
+- DMA-BUF heap: 4.2 GB → **425 MB** (AiCore's Tensor memory released)
+
+That's enough headroom to run a 6 GB VM allocation through a full
+backup without LMK firing. Empirically reproduced after the change;
+not before.
+
+**What you lose** (full list in
+[`android-disabled-packages.md`](../android-disabled-packages.md)):
+
+- Magic Compose in Gboard, Smart Reply in Messages, Now Brief, Recorder Summarize
+- Google Text-to-Speech (TalkBack voice, Maps voice prompts)
+
+What's kept regardless: Google Assistant (cloud), voice typing,
+camera AI features (Best Take, Magic Eraser), all non-AI Android.
+
+Other apps in your top-RSS list (Facebook, Telegram, WhatsApp, YouTube,
+Digital Wellbeing) can be added to the script's `TRACKED` array if
+you want more headroom. See the script for the format.
 
 ## Step 2 — Create the LXC
 

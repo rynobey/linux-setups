@@ -43,27 +43,38 @@ prompt() {
 }
 
 # ---- package manager detection ---------------------------------------------
-if command -v apt-get >/dev/null 2>&1; then
+# Termux gets its own branch because it has no sudo, no systemctl, and
+# its `apt` is configured for the user (not via sudo). The `pkg` wrapper
+# is the canonical way to install packages on Termux.
+if [ -n "${PREFIX:-}" ] && [ -x "${PREFIX}/bin/pkg" ]; then
+    PKG_FAMILY=termux
+elif command -v apt-get >/dev/null 2>&1; then
     PKG_FAMILY=apt
 elif command -v apk >/dev/null 2>&1; then
     PKG_FAMILY=apk
 else
-    err "no supported package manager (apt-get or apk). Edit script to add."
+    err "no supported package manager (apt-get, apk, or Termux pkg)."
     exit 1
 fi
 
 pkg_install() {
     case "$PKG_FAMILY" in
-        apt) sudo apt-get update -y && sudo apt-get install -y "$@" ;;
-        apk) sudo apk add --no-cache "$@" ;;
+        apt)    sudo apt-get update -y && sudo apt-get install -y "$@" ;;
+        apk)    sudo apk add --no-cache "$@" ;;
+        termux) pkg install -y "$@" ;;
     esac
 }
 
 # ---- git + ssh client ------------------------------------------------------
+# Termux ships openssh as a single package (no -client suffix); apt/apk
+# use openssh-client for the client side.
+case "$PKG_FAMILY" in
+    termux) ssh_pkg=openssh ;;
+    *)      ssh_pkg=openssh-client ;;
+esac
 need_install=()
 command -v git        >/dev/null 2>&1 || need_install+=(git)
-command -v ssh        >/dev/null 2>&1 || need_install+=(openssh-client)
-command -v ssh-keygen >/dev/null 2>&1 || need_install+=(openssh-client)
+command -v ssh-keygen >/dev/null 2>&1 || need_install+=("$ssh_pkg")
 if [ "${#need_install[@]}" -gt 0 ]; then
     log "installing: ${need_install[*]}"
     pkg_install "${need_install[@]}"

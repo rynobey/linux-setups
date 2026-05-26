@@ -29,19 +29,23 @@ warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; }
 
 # ---- package manager detection ---------------------------------------------
-if command -v apt-get >/dev/null 2>&1; then
+# Termux branch: no sudo, `pkg` wrapper instead of raw apt/apk.
+if [ -n "${PREFIX:-}" ] && [ -x "${PREFIX}/bin/pkg" ]; then
+    PKG_FAMILY=termux
+elif command -v apt-get >/dev/null 2>&1; then
     PKG_FAMILY=apt
 elif command -v apk >/dev/null 2>&1; then
     PKG_FAMILY=apk
 else
-    err "no supported package manager (apt-get or apk). Edit script to add."
+    err "no supported package manager (apt-get, apk, or Termux pkg)."
     exit 1
 fi
 
 pkg_install() {
     case "$PKG_FAMILY" in
-        apt) sudo apt-get update -y && sudo apt-get install -y "$@" ;;
-        apk) sudo apk add --no-cache "$@" ;;
+        apt)    sudo apt-get update -y && sudo apt-get install -y "$@" ;;
+        apk)    sudo apk add --no-cache "$@" ;;
+        termux) pkg install -y "$@" ;;
     esac
 }
 
