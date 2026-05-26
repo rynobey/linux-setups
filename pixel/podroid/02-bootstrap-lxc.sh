@@ -44,12 +44,30 @@ log "[1/6] updating apt + installing base tools"
 sudo apt-get update -y
 sudo apt-get install -y curl ca-certificates gnupg openssh-server sudo
 
-# ---- 2. authorize pubkeys --------------------------------------------------
-if [ -z "${SKIP_PUBKEYS:-}" ]; then
-    log "[2/6] authorizing pubkeys"
+# ---- 2. SSH bootstrap (start sshd + authorize pubkeys) --------------------
+# openssh-server was installed in step 1. Make sure the daemon is actually
+# running and will come up at boot, then authorize pubkeys for the
+# CURRENT user (the one running this script — see setup-pubuntu-lxc.sh,
+# which arranges for that to be the freshly-created user, not root).
+if [ -z "${SKIP_SSH:-${SKIP_PUBKEYS:-}}" ]; then
+    log "[2/6] SSH bootstrap: starting sshd + authorizing pubkeys"
+
+    # systemctl path (systemd-based LXC, the normal Ubuntu noble case).
+    # Fall back to plain `service` for non-systemd init.
+    if command -v systemctl >/dev/null 2>&1 && systemctl --no-pager status >/dev/null 2>&1; then
+        sudo systemctl enable --now ssh 2>/dev/null \
+            || sudo systemctl enable --now sshd 2>/dev/null \
+            || warn "  couldn't enable+start ssh via systemctl — check sudo systemctl status ssh"
+    else
+        sudo service ssh start 2>/dev/null \
+            || sudo service sshd start 2>/dev/null \
+            || warn "  couldn't start ssh via service — check /etc/init.d/"
+    fi
+
+    # Authorize pubkeys from the local repo into ~/.ssh/authorized_keys
     "$SCRIPT_DIR/authorize-pubkeys.sh"
 else
-    log "[2/6] skipped (SKIP_PUBKEYS=1)"
+    log "[2/6] skipped (SKIP_SSH=1 or SKIP_PUBKEYS=1)"
 fi
 
 # ---- 3. docker -------------------------------------------------------------

@@ -86,6 +86,13 @@ if [ "$GRANT_SUDO" -eq 1 ]; then
     usermod -aG sudo "$USERNAME"
 fi
 
+# --- Record the username so callers (e.g. setup-pubuntu-lxc.sh from Termux)
+# can detect which user was just created and chain into a bootstrap-as-user
+# step. Plain file, one line, no metadata. Idempotent — overwritten on each
+# create-user.sh invocation.
+echo "$USERNAME" > /etc/podroid-last-user
+chmod 644 /etc/podroid-last-user
+
 # --- Summary ---
 SUDO_STATUS=$( [ "$GRANT_SUDO" -eq 1 ] && echo yes || echo no )
 cat <<EOF

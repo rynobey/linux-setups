@@ -4,12 +4,19 @@
 # cloned in either Alpine or the LXC.
 #
 # Usage:
-#   bash lxc-run.sh <local-script-path> [args-to-script ...]
+#   bash lxc-run.sh [--as <username>] <local-script-path> [args-to-script ...]
 #
 # Examples:
 #   bash lxc-run.sh ../podroid/create-user.sh
-#   bash lxc-run.sh ../podroid/02-bootstrap-lxc.sh
-#   LXC_NAME=foo bash lxc-run.sh ../podroid/install-docker.sh
+#   bash lxc-run.sh --as ryno ../podroid/02-bootstrap-lxc.sh
+#   LXC_NAME=foo LXC_USER=ryno bash lxc-run.sh ../podroid/install-docker.sh
+#
+# By default the script runs inside the LXC as root (uid 0). Pass --as
+# <username> (or set LXC_USER) to switch to a non-root user — uses
+# `runuser -l` which doesn't prompt for a password since we're already
+# root from lxc-attach. The remote script will then have $HOME, $USER,
+# etc. set to that user's environment, and any sudo calls inside it
+# will prompt for the user's sudo password the first time.
 #
 # How it works:
 #   1. SSH preflight + verify the LXC is running.
@@ -48,8 +55,19 @@
 
 set -euo pipefail
 
+LXC_USER="${LXC_USER:-}"
+
+# Allow --as before the script path so script args can also start with --
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --as) LXC_USER="$2"; shift 2 ;;
+        --)   shift; break ;;
+        *)    break ;;
+    esac
+done
+
 if [ "$#" -lt 1 ]; then
-    sed -n '2,50p' "$0" >&2
+    sed -n '2,60p' "$0" >&2
     exit 2
 fi
 
@@ -142,12 +160,26 @@ for a in "$@"; do
     QUOTED_ARGS+=" $(printf '%q' "$a")"
 done
 
-log "running $SCRIPT_RELPATH$QUOTED_ARGS inside LXC '$LXC_NAME'"
-
 # ---- 6. exec with TTY through lxc-attach ----------------------------------
+# When LXC_USER is set, wrap the in-LXC command in `runuser -l <user> -c`
+# so the script runs as that user (with the user's $HOME / $USER set,
+# and starting in their home dir). We're already root inside the LXC
+# via lxc-attach, so runuser doesn't prompt for a password — but any
+# `sudo` inside the script will prompt for the user's password (cached
+# for ~15 min after first entry).
+INNER_CMD="${ENV_PREFIX}bash $LXC_INTERNAL_DIR/$SCRIPT_RELPATH$QUOTED_ARGS"
+if [ -n "$LXC_USER" ]; then
+    log "running $SCRIPT_RELPATH$QUOTED_ARGS inside LXC '$LXC_NAME' as user '$LXC_USER'"
+    # Ensure the user can read the temp dir even if extracted as root
+    PREP_CMD="chown -R $LXC_USER: $LXC_INTERNAL_DIR && cd ~$LXC_USER &&"
+    INNER_CMD="$PREP_CMD runuser -l $(printf '%q' "$LXC_USER") -c $(printf '%q' "$INNER_CMD")"
+else
+    log "running $SCRIPT_RELPATH$QUOTED_ARGS inside LXC '$LXC_NAME' as root"
+fi
+
 EXIT_CODE=0
 ssh -t -p "$ALPINE_PORT" "${ALPINE_USER}@${ALPINE_HOST}" \
-    "trap 'rm -rf $REMOTE_DIR' EXIT; lxc-attach -n $LXC_NAME -- ${ENV_PREFIX}bash $LXC_INTERNAL_DIR/$SCRIPT_RELPATH$QUOTED_ARGS" \
+    "trap 'rm -rf $REMOTE_DIR' EXIT; lxc-attach -n $LXC_NAME -- bash -c $(printf '%q' "$INNER_CMD")" \
     || EXIT_CODE=$?
 
 exit $EXIT_CODE
