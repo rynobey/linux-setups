@@ -279,22 +279,20 @@ else
     log "      \$HOME bundle: $home_size at $HOME_DEST"
 
     # ---- 5b. test-decrypt verification ----------------------------------
-    # age -p's "type passphrase twice to confirm" catches single-keystroke
-    # typos but NOT consistent ones (typing the same wrong passphrase
-    # twice passes the confirm check). The only thing that proves the
-    # backup is recoverable is an actual decrypt attempt. Prompts the
-    # user a THIRD time for the same passphrase and verifies age can
-    # decrypt the first 4 KB. If it can't, deletes the unreadable file
-    # so a future restore doesn't waste time on a doomed artifact.
+    # See pixel/podroid/helper/backup.sh for the full design notes.
+    # Full decrypt to /dev/null avoids pipefail/SIGPIPE interactions and
+    # doesn't suppress age's "Enter passphrase:" stderr prompt.
     log ""
     log "      verifying \$HOME bundle decrypts — enter the SAME passphrase ONCE MORE"
-    bytes=$(age -d "$HOME_DEST" 2>/dev/null | head -c 4096 | wc -c | tr -d ' ')
-    if [ "${bytes:-0}" -gt 0 ]; then
-        log "      ✓ passphrase verified ($bytes bytes test-decrypted)"
+    if age -d "$HOME_DEST" > /dev/null; then
+        log "      ✓ passphrase verified — bundle is recoverable"
     else
-        err "      ✗ DECRYPT FAILED — your passphrase doesn't match the file."
-        err "      Removing unreadable file: $HOME_DEST"
-        rm -f "$HOME_DEST"
+        err "      ✗ DECRYPT TEST FAILED."
+        err "      The bundle at $HOME_DEST may or may not be recoverable."
+        err "      Re-verify manually:"
+        err "        age -d $HOME_DEST > /dev/null"
+        err "      If THAT succeeds, the test had a glitch. If it fails too,"
+        err "      the passphrase doesn't match this file — recreate the snapshot."
         exit 1
     fi
 fi

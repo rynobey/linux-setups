@@ -155,6 +155,12 @@ if sudo lxc-info -n "$LXC_NAME" -s 2>/dev/null | grep -q RUNNING; then
     was_running=1
     log "stopping LXC '${LXC_NAME}' for a consistent snapshot"
     sudo lxc-stop -n "$LXC_NAME"
+    # Defensive: ALWAYS restart the LXC on script exit, regardless of
+    # success/failure of the subsequent steps. Without this, an error
+    # in tar/age/test-decrypt would leave pubuntu stopped — the user's
+    # SSH access vanishes until they manually `lxc-start`.
+    # shellcheck disable=SC2064  # we want $LXC_NAME expanded NOW
+    trap "log 'auto-restarting LXC ${LXC_NAME} (script exit)'; sudo lxc-start -n ${LXC_NAME} 2>/dev/null || true" EXIT
 fi
 
 # ---- stream tar → (age) → output -------------------------------------------
@@ -173,17 +179,27 @@ if [ "$ENCRYPT" -eq 1 ]; then
     # age -p's confirm-by-retyping catches single-keystroke typos but not
     # consistent ones — the only proof the backup is recoverable is an
     # actual decrypt attempt. Prompt for the SAME passphrase a third
-    # time and verify the first 4 KB decrypts. If not, remove the file
-    # to prevent a future restore from wasting time on a doomed artifact.
+    # time and decrypt the WHOLE file to /dev/null. Slow-ish for large
+    # backups but bulletproof:
+    #   - No pipeline, so pipefail / SIGPIPE can't fire mid-decrypt.
+    #   - age's stderr is NOT redirected, so the user sees the
+    #     "Enter passphrase:" prompt.
+    #   - On failure we WARN + exit but DON'T auto-delete, because
+    #     non-zero exit could also mean a /dev/tty issue rather than
+    #     a real passphrase mismatch. Let the user re-verify manually.
+    # ChaCha20-Poly1305 is hardware-accelerated on modern ARM; 1 GB
+    # takes ~5 sec to decrypt.
     log ""
     log "verifying $out decrypts — enter the SAME passphrase ONCE MORE"
-    bytes=$(age -d "$out" 2>/dev/null | head -c 4096 | wc -c | tr -d ' ')
-    if [ "${bytes:-0}" -gt 0 ]; then
-        log "✓ passphrase verified ($bytes bytes test-decrypted)"
+    if age -d "$out" > /dev/null; then
+        log "✓ passphrase verified — backup is recoverable"
     else
-        err "✗ DECRYPT FAILED — your passphrase doesn't match the file."
-        err "  Removing unreadable file: $out"
-        sudo rm -f "$out"
+        err "✗ DECRYPT TEST FAILED."
+        err "  The backup at $out may or may not be recoverable."
+        err "  Re-verify manually:"
+        err "    age -d $out > /dev/null"
+        err "  If THAT succeeds, the test had a glitch. If it fails too,"
+        err "  the passphrase doesn't match this file — recreate the backup."
         exit 1
     fi
 else
@@ -196,10 +212,7 @@ fi
 size=$(du -h "$out" | awk '{print $1}')
 log "done — $size"
 
-# ---- restart if we stopped it ---------------------------------------------
-if [ "$was_running" -eq 1 ]; then
-    log "restarting LXC"
-    sudo lxc-start -n "$LXC_NAME"
-fi
+# LXC restart is handled by the EXIT trap set above (so it runs even
+# if the test-decrypt step or some other intermediate step fails).
 
 log "list all backups with:  $0 --list"
