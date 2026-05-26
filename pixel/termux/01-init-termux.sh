@@ -59,8 +59,30 @@ fi
 log "[1/6] updating package index + installing core tools"
 pkg update -y
 pkg install -y \
-    git openssh android-tools termux-tools termux-api \
+    git openssh android-tools termux-tools termux-api termux-exec \
     curl wget tar xz-utils age nano coreutils
+
+# ---- 1b. ensure termux-exec is loaded via LD_PRELOAD -----------------------
+# termux-exec hooks execve() to rewrite Linux-style shebangs like
+# `#!/usr/bin/env bash` into Termux's actual bash path. Without it, any
+# script in this repo with `#!/usr/bin/env bash` (i.e. almost all of
+# them) fails on Termux with "/usr/bin/env: bad interpreter".
+#
+# Termux usually sets LD_PRELOAD for you, but some shell-startup
+# configs strip it. Append a defensive export to .bashrc so this works
+# regardless. Idempotent — only adds the line if it's not already there.
+TE_LIB='$PREFIX/lib/libtermux-exec.so'
+TE_LINE="export LD_PRELOAD=$TE_LIB"
+if ! grep -qF "LD_PRELOAD=$TE_LIB" "$HOME/.bashrc" 2>/dev/null; then
+    log "[1b] adding LD_PRELOAD=libtermux-exec.so to ~/.bashrc"
+    printf '\n# Enable termux-exec shebang rewriting (added by 01-init-termux.sh)\n%s\n' \
+        "$TE_LINE" >> "$HOME/.bashrc"
+else
+    log "[1b] LD_PRELOAD for termux-exec already in ~/.bashrc — skipping"
+fi
+# Apply to current shell so the rest of init.sh and anything chained
+# after also benefits.
+export LD_PRELOAD="$PREFIX/lib/libtermux-exec.so"
 
 # ---- 2. shared-storage access ----------------------------------------------
 # Creates ~/storage/ with symlinks to /sdcard/Download, /sdcard/Pictures,

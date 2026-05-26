@@ -1,4 +1,4 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 # Run any local script on Podroid's Alpine host via SSH, without
 # requiring linux-setups to be cloned inside Alpine.
 #

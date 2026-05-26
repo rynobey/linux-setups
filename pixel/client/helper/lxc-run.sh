@@ -1,4 +1,4 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 # Run a local script INSIDE the pubuntu LXC (which lives inside Alpine
 # which lives inside Podroid), without requiring linux-setups to be
 # cloned in either Alpine or the LXC.
