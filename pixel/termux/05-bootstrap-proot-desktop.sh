@@ -80,6 +80,13 @@ apt-get install -y --no-install-recommends \
     ca-certificates
 
 apt-get clean
+
+# Initialize /etc/machine-id — proot-distro doesn't run systemd-machine-id-setup
+# during bootstrap, so dbus-launch chokes on empty ID at first GUI session.
+# Idempotent: dbus-uuidgen --ensure only writes if missing/empty.
+rm -f /var/lib/dbus/machine-id
+dbus-uuidgen --ensure=/etc/machine-id
+ln -sf /etc/machine-id /var/lib/dbus/machine-id
 BOOTSTRAP
 
 # ---- 2. Firefox (optional, separate because it's big) ---------------------

@@ -32,6 +32,20 @@ START_PULSE="${START_PULSE:-1}"
 log()  { printf '\033[1;34m[deploy-runtime]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 
+# ---- 0. Termux-side prereqs (the runtime scripts need these) -------------
+# `termux-x11` is the companion CLI for the Termux:X11 Android app; it lives
+# in the x11-repo. Without it, ~/start-x11.sh logs "termux-x11: not found".
+if ! command -v termux-x11 >/dev/null 2>&1; then
+    log "[0/4] installing x11-repo + termux-x11-nightly (Termux:X11 companion)"
+    pkg install -y x11-repo >/dev/null 2>&1 || true
+    pkg install -y termux-x11-nightly >/dev/null 2>&1 || \
+        warn "       'pkg install termux-x11-nightly' failed — install manually before running ~/start-x11.sh"
+fi
+# pulseaudio is optional but ~/start-x11.sh references it; install if not present
+if [ "${START_PULSE:-1}" = "1" ] && ! command -v pulseaudio >/dev/null 2>&1; then
+    pkg install -y pulseaudio >/dev/null 2>&1 || true
+fi
+
 write_with_backup() {
     local path="$1"
     [ -f "$path" ] && cp "$path" "$path.bak"
