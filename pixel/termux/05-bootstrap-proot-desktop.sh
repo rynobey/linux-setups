@@ -257,11 +257,11 @@ bindsym \$mod+Shift+e exec "i3-nagbar -t warning -m 'Exit i3?' -B 'Yes' 'i3-msg 
 
 # Cheatsheet — pop the keybindings in a floating terminal. Bound to mod+slash
 # (Ctrl+Alt+/) because Termux:X11's XKB keymap rewrites Ctrl+Alt+F1..F12 to
-# XF86Switch_VT_* (the Linux VT-switch keysyms) regardless of srvrkeys:none,
-# so F-keys are unusable as i3 bindings when \$mod includes Ctrl+Alt.
-# slash (where ? lives) is the natural fallback for a help key.
-bindsym \$mod+slash exec --no-startup-id xfce4-terminal -T "i3 cheatsheet" -e \\
-    sh -c 'grep -E "^bindsym " ~/.config/i3/config | sed "s/^bindsym //; s/exec //" | less'
+# XF86Switch_VT_* regardless of srvrkeys:none, making F-keys unusable as i3
+# bindings when \$mod includes Ctrl+Alt. The actual command is in a wrapper
+# script (see below — generated alongside this config); i3's exec parser
+# struggles with nested quotes + line-continuation, so keep the bindsym tiny.
+bindsym \$mod+slash exec --no-startup-id ~/.local/bin/i3-cheatsheet
 for_window [title="i3 cheatsheet"] floating enable, resize set width 800 px height 600 px
 
 # Resize mode (presets: small/medium/large via shift, plus hjkl nudge)
@@ -335,6 +335,17 @@ MiscMenubarDefault=FALSE
 ShortcutsNoMnemonics=TRUE
 ShortcutsNoMenukey=FALSE
 TRC
+
+# Cheatsheet helper — bound to \$mod+slash by the i3 config. Lives in its own
+# script so the i3 bindsym stays a single short line (i3's exec parser is
+# fragile with nested quotes + line continuations).
+mkdir -p ~/.local/bin
+cat > ~/.local/bin/i3-cheatsheet <<'CHEAT'
+#!/bin/sh
+exec xfce4-terminal -T "i3 cheatsheet" -e \
+    "sh -c 'grep -E \"^bindsym \" \"$HOME/.config/i3/config\" | sed \"s/^bindsym //; s/exec //\" | less'"
+CHEAT
+chmod +x ~/.local/bin/i3-cheatsheet
 
 # Friendly default bashrc additions
 grep -q 'PROOT_UBUNTU_PROMPT' ~/.bashrc 2>/dev/null || cat >> ~/.bashrc <<'BRC'

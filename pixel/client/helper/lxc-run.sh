@@ -28,10 +28,12 @@
 #      ../../pubkeys/ at the repo root. Cost is tiny — the whole repo
 #      minus .git is well under a megabyte.
 #   3. mktemp a working dir inside the LXC's rootfs on Alpine — path looks
-#      like /var/lib/lxc/$LXC_NAME/rootfs/tmp/lxc-run.XXXXXX from Alpine,
-#      but the same dir appears as /tmp/lxc-run.XXXXXX from inside the
-#      LXC (privileged LXC means uid 0 == uid 0, so the file is readable
-#      inside).
+#      like /var/lib/lxc/$LXC_NAME/rootfs/var/tmp/lxc-run.XXXXXX from
+#      Alpine, but the same dir appears as /var/tmp/lxc-run.XXXXXX from
+#      inside the LXC (privileged LXC means uid 0 == uid 0, so the file
+#      is readable inside). /var/tmp instead of /tmp because the
+#      container's first-boot tmp cleanup can race a /tmp stage and
+#      wipe it mid-extract.
 #   4. Stream the tarball to that dir via SSH, extract.
 #   5. ssh -t to Alpine, then `lxc-attach -n $LXC_NAME -- bash <script>`.
 #      The `ssh -t` PTY is propagated through lxc-attach to the
@@ -138,11 +140,31 @@ if [ "$STATE" != "RUNNING" ]; then
 fi
 
 # ---- 3. mktemp working dir inside the LXC's rootfs ------------------------
+# We stage in /var/tmp instead of /tmp specifically to avoid a race with
+# the container's first-boot tmp cleanup. When 05-setup-lxc-fresh.sh
+# starts the LXC and immediately follows with lxc-run, the container's
+# systemd-tmpfiles-setup is still racing against our extract — anything
+# we put under /tmp can be wiped mid-tar (manifests as "Cannot mkdir:
+# No such file or directory" on every file). /var/tmp has the same 1777
+# perms but a 30-day cleanup threshold and isn't touched at boot.
+#
+# Also wait for the container to be reachable via lxc-attach before
+# staging, so we're past the early-boot transient before doing work.
 LXC_ROOTFS="/var/lib/lxc/$LXC_NAME/rootfs"
-REMOTE_DIR=$(ssh -p "$ALPINE_PORT" "${ALPINE_USER}@${ALPINE_HOST}" \
-    "mktemp -d $LXC_ROOTFS/tmp/lxc-run.XXXXXX")
 
-# Path as seen from INSIDE the LXC (strips the rootfs prefix → /tmp/lxc-run.XXX)
+# Readiness probe — retry lxc-attach until a no-op runs, then proceed.
+ssh -p "$ALPINE_PORT" "${ALPINE_USER}@${ALPINE_HOST}" "
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        if lxc-attach -n $LXC_NAME -- true 2>/dev/null; then exit 0; fi
+        sleep 1
+    done
+    exit 1
+" || { err "LXC '$LXC_NAME' not reachable via lxc-attach after 10s"; exit 1; }
+
+REMOTE_DIR=$(ssh -p "$ALPINE_PORT" "${ALPINE_USER}@${ALPINE_HOST}" \
+    "mktemp -d $LXC_ROOTFS/var/tmp/lxc-run.XXXXXX")
+
+# Path as seen from INSIDE the LXC (strips the rootfs prefix → /var/tmp/lxc-run.XXX)
 LXC_INTERNAL_DIR="${REMOTE_DIR#$LXC_ROOTFS}"
 
 # ---- 4. tar the chosen root, stream + extract on Alpine -------------------

@@ -33,18 +33,50 @@ log()  { printf '\033[1;34m[deploy-runtime]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 
 # ---- 0. Termux-side prereqs (the runtime scripts need these) -------------
-# `termux-x11` is the companion CLI for the Termux:X11 Android app; it lives
-# in the x11-repo. Without it, ~/start-x11.sh logs "termux-x11: not found".
-if ! command -v termux-x11 >/dev/null 2>&1; then
-    log "[0/4] installing x11-repo + termux-x11-nightly (Termux:X11 companion)"
-    pkg install -y x11-repo >/dev/null 2>&1 || true
-    pkg install -y termux-x11-nightly >/dev/null 2>&1 || \
-        warn "       'pkg install termux-x11-nightly' failed — install manually before running ~/start-x11.sh"
+# DroidDesk's "Mesa Zink Core" + "Vulkan Loader" step came down to a handful
+# of Termux packages from x11-repo. Without them the X server (Termux:X11)
+# and any Termux-native graphical app fall back to all-software rendering,
+# which is the perceived video-stutter problem on PowerVR.
+#
+# Notes per package:
+#   mesa                          OpenGL implementation (includes Zink)
+#   vulkan-loader-android         Vulkan ICD loader, Android-specific build
+#   mesa-vulkan-icd-swrast        Software Vulkan (lavapipe). PowerVR DXT has
+#                                 no Mesa Vulkan ICD (PVR driver is Rogue-only),
+#                                 so swrast is the workable fallback Vulkan.
+#   virglrenderer-android         GL-over-virgl backend Termux:X11 can use
+#                                 for GPU-rendered windows.
+#   xorg-xrandr                   Resolution control (e.g. for external display).
+#
+# Env knobs:
+#   START_PULSE             default 1   include pulseaudio (~/start-x11.sh uses it)
+#   INSTALL_TERMUX_FIREFOX  default 0   ALSO install Termux-native firefox as
+#                                       a smoother alternative to proot-firefox
+#                                       (this is what DroidDesk's "smooth video"
+#                                       experience was actually using). Launch
+#                                       from a Termux shell with DISPLAY=:0.
+log "[0/4] installing Termux-side prereqs (X11, Mesa, Vulkan loader, virgl)"
+pkg install -y x11-repo >/dev/null 2>&1 || true
+
+# vulkan-loader-generic and vulkan-loader-android collide (both ship libvulkan.so).
+# We want the -android one (hooks into Android's Vulkan layer, can reach
+# vulkan.powervr.so). If the generic build is sitting there from a transitive
+# dep, swap it for the android variant.
+if dpkg -s vulkan-loader-generic >/dev/null 2>&1 \
+        && ! dpkg -s vulkan-loader-android >/dev/null 2>&1; then
+    log "    swapping vulkan-loader-generic → vulkan-loader-android"
+    pkg uninstall -y vulkan-loader-generic >/dev/null 2>&1 || true
 fi
-# pulseaudio is optional but ~/start-x11.sh references it; install if not present
-if [ "${START_PULSE:-1}" = "1" ] && ! command -v pulseaudio >/dev/null 2>&1; then
-    pkg install -y pulseaudio >/dev/null 2>&1 || true
-fi
+
+TERMUX_PKGS="termux-x11-nightly mesa vulkan-loader-android mesa-vulkan-icd-swrast virglrenderer-android xorg-xrandr"
+[ "${START_PULSE:-1}" = "1" ]            && TERMUX_PKGS="$TERMUX_PKGS pulseaudio"
+[ "${INSTALL_TERMUX_FIREFOX:-0}" = "1" ] && TERMUX_PKGS="$TERMUX_PKGS firefox"
+
+for p in $TERMUX_PKGS; do
+    if ! dpkg -s "$p" >/dev/null 2>&1; then
+        pkg install -y "$p" >/dev/null 2>&1 || warn "    pkg install $p failed (continuing)"
+    fi
+done
 
 write_with_backup() {
     local path="$1"
