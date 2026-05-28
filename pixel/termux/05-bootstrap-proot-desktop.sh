@@ -147,7 +147,7 @@ I3_CONFIG=$(cat <<EOF
 #                    safe across most other apps.)
 #
 # Cheat sheet (with \$mod = Ctrl+Alt):
-#   \$mod+F1              pop this cheatsheet in a floating terminal
+#   \$mod+slash           pop this cheatsheet in a floating terminal (Ctrl+Alt+/)
 #   \$mod+Enter           terminal
 #   \$mod+d               app launcher (rofi)
 #   \$mod+Shift+q         kill focused window
@@ -255,9 +255,12 @@ bindsym \$mod+Shift+c reload
 bindsym \$mod+Shift+r restart
 bindsym \$mod+Shift+e exec "i3-nagbar -t warning -m 'Exit i3?' -B 'Yes' 'i3-msg exit'"
 
-# F1 — pop the keybindings cheatsheet in a floating terminal
-# (mod+F1 by convention, matches GNOME/KDE help convention)
-bindsym \$mod+F1 exec --no-startup-id xfce4-terminal -T "i3 cheatsheet" -e \\
+# Cheatsheet — pop the keybindings in a floating terminal. Bound to mod+slash
+# (Ctrl+Alt+/) because Termux:X11's XKB keymap rewrites Ctrl+Alt+F1..F12 to
+# XF86Switch_VT_* (the Linux VT-switch keysyms) regardless of srvrkeys:none,
+# so F-keys are unusable as i3 bindings when \$mod includes Ctrl+Alt.
+# slash (where ? lives) is the natural fallback for a help key.
+bindsym \$mod+slash exec --no-startup-id xfce4-terminal -T "i3 cheatsheet" -e \\
     sh -c 'grep -E "^bindsym " ~/.config/i3/config | sed "s/^bindsym //; s/exec //" | less'
 for_window [title="i3 cheatsheet"] floating enable, resize set width 800 px height 600 px
 
