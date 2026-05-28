@@ -9,8 +9,18 @@
 # Env overrides (must match what 04 used):
 #   PROOT_DISTRO    default: ubuntu
 #   PROOT_USER      default: ryno
-#   I3_MOD          default: Mod4         (Super key; set to Mod1 for Alt if
-#                                          your hardware keyboard has no Super)
+#   I3_MOD          default: Ctrl+Mod1    (Ctrl+Alt — works on every keyboard
+#                                          and doesn't collide with bare-Alt
+#                                          shortcuts inside terminal apps.
+#                                          Use 'Mod4' if you have a Super
+#                                          key and prefer the canonical i3
+#                                          default. 'Mod1' = Alt-only is
+#                                          dangerous if your apps use Alt+letter.)
+#   I3_FLOAT_MOD    default: Mod4         (mouse-drag-to-move floating windows;
+#                                          must be a single modifier, not a combo.
+#                                          Mod4 is inert on keyboards without
+#                                          Super — that's fine, mouse-drag won't
+#                                          activate, no collision risk.)
 #   I3_FONT         default: "DejaVu Sans Mono 10"
 #   INSTALL_FIREFOX default: 1            set 0 to skip Firefox (50 MB)
 
@@ -18,7 +28,8 @@ set -euo pipefail
 
 PROOT_DISTRO="${PROOT_DISTRO:-ubuntu}"
 PROOT_USER="${PROOT_USER:-ryno}"
-I3_MOD="${I3_MOD:-Mod4}"
+I3_MOD="${I3_MOD:-Ctrl+Mod1}"
+I3_FLOAT_MOD="${I3_FLOAT_MOD:-Mod4}"
 I3_FONT="${I3_FONT:-DejaVu Sans Mono 10}"
 INSTALL_FIREFOX="${INSTALL_FIREFOX:-1}"
 
@@ -65,7 +76,9 @@ apt-get install -y --no-install-recommends \
     fonts-dejavu fonts-noto-core fonts-firacode \
     dbus-x11 \
     libnotify-bin \
-    xdg-utils
+    xdg-utils \
+    x11-xserver-utils \
+    x11-utils
 
 # Mesa + Vulkan tools (software path on PowerVR for now; will pick up
 # hardware via Vortek bridge if that ever lands)
@@ -127,9 +140,14 @@ log "[3/4] writing i3 config for user '$PROOT_USER'"
 # The substitutions happen in Termux side, then we pipe into proot.
 I3_CONFIG=$(cat <<EOF
 # i3 config — Pixel 10 + Termux:X11 + proot Ubuntu
-# Modifier: $I3_MOD (default Mod4 = Super; change with I3_MOD env var)
+# Modifier: $I3_MOD (default Ctrl+Mod1 = Ctrl+Alt; override with I3_MOD env var.
+#                    Ctrl+Alt was chosen because Termux:X11 + on-screen / external
+#                    keyboards often lack a usable Super key, and bare Alt
+#                    collides with terminal-app shortcuts. Ctrl+Alt+letter is
+#                    safe across most other apps.)
 #
-# Cheat sheet (defaults):
+# Cheat sheet (with \$mod = Ctrl+Alt):
+#   \$mod+F1              pop this cheatsheet in a floating terminal
 #   \$mod+Enter           terminal
 #   \$mod+d               app launcher (rofi)
 #   \$mod+Shift+q         kill focused window
@@ -150,8 +168,15 @@ I3_CONFIG=$(cat <<EOF
 set \$mod $I3_MOD
 font pango:$I3_FONT
 
-# Use Mouse+\$mod to drag floating windows
-floating_modifier \$mod
+# Use Mouse+<floating_modifier> to drag floating windows (single-modifier only;
+# can't be the same compound-modifier as \$mod when \$mod is e.g. Ctrl+Mod1).
+floating_modifier $I3_FLOAT_MOD
+
+# Disable XKB's Ctrl+Alt+F1..F12 → XF86Switch_VT_* grab so those keysyms reach
+# i3 unchanged. Without this, any \$mod=Ctrl+Alt user can't bind F-keys (they
+# get rewritten to XF86Switch_VT_N at the X server layer). exec_always re-runs
+# on i3 reload, so a wrong layout / Termux:X11 restart heals itself.
+exec_always --no-startup-id setxkbmap -option "" -option srvrkeys:none
 
 # Default terminal + app launcher
 bindsym \$mod+Return exec xfce4-terminal
@@ -230,6 +255,12 @@ bindsym \$mod+Shift+c reload
 bindsym \$mod+Shift+r restart
 bindsym \$mod+Shift+e exec "i3-nagbar -t warning -m 'Exit i3?' -B 'Yes' 'i3-msg exit'"
 
+# F1 — pop the keybindings cheatsheet in a floating terminal
+# (mod+F1 by convention, matches GNOME/KDE help convention)
+bindsym \$mod+F1 exec --no-startup-id xfce4-terminal -T "i3 cheatsheet" -e \\
+    sh -c 'grep -E "^bindsym " ~/.config/i3/config | sed "s/^bindsym //; s/exec //" | less'
+for_window [title="i3 cheatsheet"] floating enable, resize set width 800 px height 600 px
+
 # Resize mode (presets: small/medium/large via shift, plus hjkl nudge)
 mode "resize" {
     bindsym h resize shrink width  10 px or 10 ppt
@@ -290,6 +321,17 @@ xrdb -merge ~/.Xresources 2>/dev/null || true
 exec dbus-launch --exit-with-session i3
 XIN
 chmod +x ~/.xinitrc
+
+# xfce4-terminal: stop Alt+letter from triggering the menu bar (it eats
+# Alt+T → tmux prefix, etc.). Also hide the menu bar by default — right-click
+# → "Show Menubar" to bring it back temporarily.
+mkdir -p ~/.config/xfce4/terminal
+cat > ~/.config/xfce4/terminal/terminalrc <<'TRC'
+[Configuration]
+MiscMenubarDefault=FALSE
+ShortcutsNoMnemonics=TRUE
+ShortcutsNoMenukey=FALSE
+TRC
 
 # Friendly default bashrc additions
 grep -q 'PROOT_UBUNTU_PROMPT' ~/.bashrc 2>/dev/null || cat >> ~/.bashrc <<'BRC'
