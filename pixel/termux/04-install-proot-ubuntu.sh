@@ -1,27 +1,40 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# Install Ubuntu 24.04 LTS (Noble) into a proot-distro container and
-# create a non-root user with passwordless sudo. After this runs, you
-# have a usable proot Linux env; the next step (05-bootstrap-proot-desktop.sh)
-# installs i3 + the GUI bits inside it.
+# Install Ubuntu into a proot-distro container and create a non-root
+# user with passwordless sudo. After this runs, you have a usable proot
+# Linux env; the next step (05-bootstrap-proot-desktop.sh) installs i3
+# + the GUI bits inside it.
 #
 # Run after 01-init-termux.sh. Idempotent — if the distro is already
 # installed and the user already exists, it skips both.
 #
+# Which Ubuntu release you get:
+#   proot-distro's `ubuntu` alias maps to whatever the proot-distro maintainers
+#   point at — on v4.38.0 (current Termux package) that is 25.10 "questing"
+#   (interim release, 9-month support, EOL July 2026). LTS 24.04 (noble) or
+#   future 26.04 require an explicit alias OR a custom tarball URL via
+#   PD_OVERRIDE_TARBALL_URL. The script prints a hint if only the generic
+#   alias is available, so you can opt in to LTS if you want it.
+#
 # Env overrides:
 #   PROOT_DISTRO    default: ubuntu              proot-distro alias
-#   PROOT_RELEASE   default: noble               (Ubuntu 24.04 LTS)
 #   PROOT_USER      default: ryno                user created inside the rootfs
 #   PROOT_USER_UID  default: 1000
 #   FORCE_REINSTALL default: 0                   set 1 to nuke + reinstall the rootfs
 #
-# Why Ubuntu 24.04 specifically: 22.04's GTK4 is too old for modern apps
-# (Ghostty, recent GNOME-stack things). 24.04 ships GTK 4.14+, fresh
-# Mesa, and stays in LTS support until 2029.
+# Forcing LTS (24.04) on a proot-distro that only has the generic alias:
+#   proot-distro remove ubuntu
+#   PD_OVERRIDE_TARBALL_URL=https://easycli.sh/proot-distro/ubuntu-noble-aarch64-pd-v4.37.0.tar.xz \
+#       proot-distro install ubuntu
+#   # if that URL 404s, fall back to Ubuntu's official cloud image:
+#   PD_OVERRIDE_TARBALL_URL=https://cloud-images.ubuntu.com/minimal/releases/noble/release/ubuntu-24.04-minimal-cloudimg-arm64-root.tar.xz \
+#       PD_OVERRIDE_TARBALL_STRIP_OPT=0 proot-distro install ubuntu
+#
+# Then re-run this script — it'll skip the install (rootfs is already there)
+# and just create the user.
 
 set -euo pipefail
 
 PROOT_DISTRO="${PROOT_DISTRO:-ubuntu}"
-PROOT_RELEASE="${PROOT_RELEASE:-noble}"
 PROOT_USER="${PROOT_USER:-ryno}"
 PROOT_USER_UID="${PROOT_USER_UID:-1000}"
 FORCE_REINSTALL="${FORCE_REINSTALL:-0}"
@@ -73,9 +86,33 @@ else
         log "[2/4] FORCE_REINSTALL=1 — removing existing $PROOT_DISTRO first"
         proot-distro remove "$PROOT_DISTRO" || true
     fi
-    log "[2/4] installing $PROOT_DISTRO ($PROOT_RELEASE) — this downloads ~50 MB and takes a few minutes"
-    # 'ubuntu' alias maps to noble (24.04 LTS) on both proot-distro v4 and v5.
-    # No --override-alias needed; we install with the default alias.
+
+    # LTS hint: if the user asked for the generic 'ubuntu' alias AND it's the
+    # only ubuntu plugin available, warn that they're about to get whatever the
+    # current proot-distro alias points to (interim, not LTS) and remind them
+    # of the override path. We don't block the install — just inform.
+    PLUGIN_DIR="$PREFIX/etc/proot-distro"
+    if [ "$PROOT_DISTRO" = "ubuntu" ] \
+            && [ "${PD_OVERRIDE_TARBALL_URL:-}" = "" ] \
+            && [ -d "$PLUGIN_DIR" ] \
+            && [ "$(ls "$PLUGIN_DIR" 2>/dev/null | grep -ci '^ubuntu')" = "1" ]; then
+        warn "Only 'ubuntu.sh' plugin found — on proot-distro v4.x this typically maps to"
+        warn "the current interim release (25.10 'questing' as of late 2025), NOT LTS."
+        warn "For Ubuntu 24.04 LTS (supported until 2029), Ctrl-C now and instead run:"
+        warn ""
+        warn "  PD_OVERRIDE_TARBALL_URL=\"https://easycli.sh/proot-distro/ubuntu-noble-aarch64-pd-v4.37.0.tar.xz\" \\"
+        warn "      bash $0"
+        warn ""
+        warn "If that URL 404s, use the official Ubuntu cloud image:"
+        warn "  PD_OVERRIDE_TARBALL_URL=\"https://cloud-images.ubuntu.com/minimal/releases/noble/release/ubuntu-24.04-minimal-cloudimg-arm64-root.tar.xz\" \\"
+        warn "      PD_OVERRIDE_TARBALL_STRIP_OPT=0 bash $0"
+        warn ""
+        warn "Sleeping 5s — Ctrl-C now if you'd rather LTS, otherwise the interim install will proceed."
+        sleep 5
+    fi
+
+    log "[2/4] installing $PROOT_DISTRO — this downloads ~50 MB and takes a few minutes"
+    # 'ubuntu' is the default alias. No --override-alias needed.
     proot-distro install "$PROOT_DISTRO" 2>&1 | sed 's/^/    /'
 
     # Re-probe ROOTFS_DIR after install so the rest of the script picks it up.

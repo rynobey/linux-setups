@@ -30,8 +30,19 @@ if ! command -v proot-distro >/dev/null 2>&1; then
     err "proot-distro not found — run 04-install-proot-ubuntu.sh first"
     exit 1
 fi
-if ! proot-distro list 2>/dev/null | grep -qw "$PROOT_DISTRO"; then
-    err "$PROOT_DISTRO not installed — run 04-install-proot-ubuntu.sh first"
+# Check the actual rootfs path (v4: installed-rootfs/<name>/, v5+: containers/<name>/rootfs/).
+# `proot-distro list`'s output format varies across versions, so don't rely on parsing it.
+ROOTFS_BASH=""
+for candidate in \
+    "$PREFIX/var/lib/proot-distro/containers/$PROOT_DISTRO/rootfs/usr/bin/bash" \
+    "$PREFIX/var/lib/proot-distro/installed-rootfs/$PROOT_DISTRO/usr/bin/bash"; do
+    if [ -x "$candidate" ]; then ROOTFS_BASH="$candidate"; break; fi
+done
+if [ -z "$ROOTFS_BASH" ]; then
+    err "$PROOT_DISTRO rootfs not found at either:"
+    err "    $PREFIX/var/lib/proot-distro/containers/$PROOT_DISTRO/rootfs/      (v5+)"
+    err "    $PREFIX/var/lib/proot-distro/installed-rootfs/$PROOT_DISTRO/        (v4)"
+    err "  run 04-install-proot-ubuntu.sh first"
     exit 1
 fi
 

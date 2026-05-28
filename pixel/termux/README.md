@@ -20,7 +20,7 @@ Termux serves two purposes in this setup:
 | [`01-init-termux.sh`](01-init-termux.sh) | One-shot fresh Termux setup: packages, storage, ed25519 key, repo clone, sshd. |
 | [`02-snapshot.sh`](02-snapshot.sh) | Create a recovery snapshot: termux-backup of `$PREFIX` + age-encrypted tar of `$HOME` + age-encrypted proot Ubuntu rootfs → `/sdcard/Download/`. |
 | [`03-restore-snapshot.sh`](03-restore-snapshot.sh) | Restore from a snapshot on a freshly-installed Termux. |
-| [`04-install-proot-ubuntu.sh`](04-install-proot-ubuntu.sh) | Install Ubuntu 24.04 LTS via proot-distro and create a sudo-capable user. |
+| [`04-install-proot-ubuntu.sh`](04-install-proot-ubuntu.sh) | Install Ubuntu via proot-distro (defaults to whatever the `ubuntu` alias currently maps to — usually the latest interim release; LTS via `PD_OVERRIDE_TARBALL_URL` — see script header) and create a sudo-capable user. |
 | [`05-bootstrap-proot-desktop.sh`](05-bootstrap-proot-desktop.sh) | Inside proot: install i3 + GUI toolkit + Firefox, write i3 config. |
 | [`06-deploy-runtime-scripts.sh`](06-deploy-runtime-scripts.sh) | Deploy `~/start-x11.sh`, `~/start-proot.sh`, `~/stop-x11.sh` runtime scripts. |
 | [`setup-desktop.sh`](setup-desktop.sh) | One-shot orchestrator that runs 04 + 05 + 06 with progress banners. |
