@@ -44,10 +44,21 @@ log "[1/4] ensuring proot + proot-distro are installed"
 pkg install -y proot proot-distro >/dev/null
 
 # ---- 2. (re)install Ubuntu -------------------------------------------------
-ROOTFS_DIR="$PREFIX/var/lib/proot-distro/containers/$PROOT_DISTRO/rootfs"
+# proot-distro v4 uses installed-rootfs/<name>/ layout; v5+ uses
+# containers/<name>/rootfs/. Probe both for back/forward compat.
+ROOTFS_DIR=""
+for candidate in \
+    "$PREFIX/var/lib/proot-distro/containers/$PROOT_DISTRO/rootfs" \
+    "$PREFIX/var/lib/proot-distro/installed-rootfs/$PROOT_DISTRO"; do
+    if [ -d "$candidate" ]; then
+        ROOTFS_DIR="$candidate"
+        break
+    fi
+done
+
 ALREADY_INSTALLED=0
 if proot-distro list 2>/dev/null | grep -qw "$PROOT_DISTRO"; then
-    if [ -x "$ROOTFS_DIR/usr/bin/bash" ]; then
+    if [ -n "$ROOTFS_DIR" ] && [ -x "$ROOTFS_DIR/usr/bin/bash" ]; then
         ALREADY_INSTALLED=1
     else
         warn "proot-distro thinks $PROOT_DISTRO is installed but rootfs looks empty — will reinstall"
@@ -63,14 +74,16 @@ else
         proot-distro remove "$PROOT_DISTRO" || true
     fi
     log "[2/4] installing $PROOT_DISTRO ($PROOT_RELEASE) — this downloads ~50 MB and takes a few minutes"
-    # proot-distro v5+ accepts --override-alias to pick a specific release.
-    # 'ubuntu' alias on current proot-distro already maps to noble (24.04);
-    # the --override-alias form here is just for clarity / future-proofing.
-    if proot-distro install --help 2>&1 | grep -q -- '--override-alias'; then
-        proot-distro install "$PROOT_DISTRO" --override-alias="$PROOT_DISTRO" 2>&1 | sed 's/^/    /'
-    else
-        proot-distro install "$PROOT_DISTRO" 2>&1 | sed 's/^/    /'
-    fi
+    # 'ubuntu' alias maps to noble (24.04 LTS) on both proot-distro v4 and v5.
+    # No --override-alias needed; we install with the default alias.
+    proot-distro install "$PROOT_DISTRO" 2>&1 | sed 's/^/    /'
+
+    # Re-probe ROOTFS_DIR after install so the rest of the script picks it up.
+    for candidate in \
+        "$PREFIX/var/lib/proot-distro/containers/$PROOT_DISTRO/rootfs" \
+        "$PREFIX/var/lib/proot-distro/installed-rootfs/$PROOT_DISTRO"; do
+        if [ -d "$candidate" ]; then ROOTFS_DIR="$candidate"; break; fi
+    done
 fi
 
 # ---- 3. quick health check (the bug we hit before would surface here) ------

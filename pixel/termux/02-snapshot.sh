@@ -322,11 +322,20 @@ fi
 
 # ---- 6. proot Ubuntu container → age-encrypted tarball --------------------
 proot_size=""
-PROOT_CONTAINER_DIR="$PREFIX/var/lib/proot-distro/containers/$PROOT_DISTRO"
+# Probe both proot-distro layouts (v5+ containers/, v4 installed-rootfs/).
+PROOT_CONTAINER_DIR=""
+for parent in \
+    "$PREFIX/var/lib/proot-distro/containers" \
+    "$PREFIX/var/lib/proot-distro/installed-rootfs"; do
+    if [ -d "$parent/$PROOT_DISTRO" ]; then
+        PROOT_CONTAINER_DIR="$parent/$PROOT_DISTRO"
+        break
+    fi
+done
 if [ "$SKIP_PROOT" -eq 1 ]; then
     log "[6/7] skipping proot Ubuntu backup (--skip-proot)"
-elif [ ! -d "$PROOT_CONTAINER_DIR" ]; then
-    log "[6/7] no proot-distro container at $PROOT_CONTAINER_DIR — skipping"
+elif [ -z "$PROOT_CONTAINER_DIR" ]; then
+    log "[6/7] no proot-distro container '$PROOT_DISTRO' found — skipping"
     log "      (install with: bash $LSDIR/pixel/termux/04-install-proot-ubuntu.sh)"
 else
     log "[6/7] writing encrypted proot $PROOT_DISTRO backup → $PROOT_DEST"

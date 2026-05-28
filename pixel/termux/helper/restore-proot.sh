@@ -32,8 +32,30 @@ fi
 IN_FILE="$1"
 DISTRO="${2:-ubuntu}"
 
-CONTAINERS_DIR="$PREFIX/var/lib/proot-distro/containers"
+# Determine which proot-distro layout this Termux uses. Prefer v5+ if both
+# parents exist (unlikely, but harmless). The backup tarball is restored
+# into whichever parent dir matches the install on THIS machine.
+CONTAINERS_DIR=""
+CONTAINER_DIR=""
+if [ -d "$PREFIX/var/lib/proot-distro/containers" ] && \
+   ! [ -d "$PREFIX/var/lib/proot-distro/installed-rootfs" ]; then
+    CONTAINERS_DIR="$PREFIX/var/lib/proot-distro/containers"
+elif [ -d "$PREFIX/var/lib/proot-distro/installed-rootfs" ]; then
+    CONTAINERS_DIR="$PREFIX/var/lib/proot-distro/installed-rootfs"
+else
+    # neither exists yet — make the v4 layout since proot-distro 4.x is what
+    # current Termux ships. If we later upgrade to v5+, proot-distro itself
+    # would normalize layouts.
+    CONTAINERS_DIR="$PREFIX/var/lib/proot-distro/installed-rootfs"
+fi
 CONTAINER_DIR="$CONTAINERS_DIR/$DISTRO"
+
+# Where the rootfs's bash lives depends on layout:
+#   v5+: $CONTAINER_DIR/rootfs/usr/bin/bash
+#   v4:  $CONTAINER_DIR/usr/bin/bash
+check_bash() {
+    [ -x "$CONTAINER_DIR/rootfs/usr/bin/bash" ] || [ -x "$CONTAINER_DIR/usr/bin/bash" ]
+}
 
 log()  { printf '\033[1;34m[restore-proot]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
@@ -78,11 +100,13 @@ if ! age -d "$IN_FILE" | tar -C "$CONTAINERS_DIR" -xf -; then
 fi
 
 # ---- 3. sanity check the restored rootfs ----------------------------------
-if [ ! -x "$CONTAINER_DIR/rootfs/usr/bin/bash" ]; then
+if ! check_bash; then
     err "restored rootfs is missing /usr/bin/bash — backup might be corrupt"
+    err "    (looked in both $CONTAINER_DIR/rootfs/usr/bin/bash (v5+) and"
+    err "    $CONTAINER_DIR/usr/bin/bash (v4))"
     exit 1
 fi
-log "  $CONTAINER_DIR/rootfs/usr/bin/bash present"
+log "  rootfs bash present"
 
 # ---- 4. live exec test ----------------------------------------------------
 log "running 'proot-distro login $DISTRO -- /bin/true' to confirm exec works"

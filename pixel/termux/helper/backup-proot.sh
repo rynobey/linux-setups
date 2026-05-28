@@ -34,21 +34,41 @@ fi
 OUT_FILE="$1"
 DISTRO="${2:-ubuntu}"
 
-CONTAINERS_DIR="$PREFIX/var/lib/proot-distro/containers"
-CONTAINER_DIR="$CONTAINERS_DIR/$DISTRO"
+# proot-distro v4 uses installed-rootfs/<name>/; v5+ uses containers/<name>/rootfs.
+# Auto-detect the layout this Termux happens to have.
+CONTAINERS_DIR=""
+CONTAINER_DIR=""
+BASH_PATH=""
+for parent in \
+    "$PREFIX/var/lib/proot-distro/containers" \
+    "$PREFIX/var/lib/proot-distro/installed-rootfs"; do
+    if [ -d "$parent/$DISTRO" ]; then
+        CONTAINERS_DIR="$parent"
+        CONTAINER_DIR="$parent/$DISTRO"
+        # bash sits one dir deeper in v5+ (under rootfs/), at the top in v4
+        if [ -x "$CONTAINER_DIR/rootfs/usr/bin/bash" ]; then
+            BASH_PATH="$CONTAINER_DIR/rootfs/usr/bin/bash"
+        elif [ -x "$CONTAINER_DIR/usr/bin/bash" ]; then
+            BASH_PATH="$CONTAINER_DIR/usr/bin/bash"
+        fi
+        break
+    fi
+done
 
 log()  { printf '\033[1;34m[backup-proot]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; }
 
 # ---- sanity ----------------------------------------------------------------
-if [ ! -d "$CONTAINER_DIR" ]; then
-    err "no proot-distro container at $CONTAINER_DIR"
+if [ -z "$CONTAINER_DIR" ]; then
+    err "no proot-distro container '$DISTRO' found in either layout:"
+    err "    $PREFIX/var/lib/proot-distro/containers/$DISTRO       (v5+)"
+    err "    $PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO  (v4)"
     err "    install one first: proot-distro install $DISTRO"
     exit 1
 fi
-if [ ! -x "$CONTAINER_DIR/rootfs/usr/bin/bash" ]; then
-    err "$CONTAINER_DIR/rootfs/usr/bin/bash missing — rootfs looks broken"
+if [ -z "$BASH_PATH" ]; then
+    err "rootfs at $CONTAINER_DIR is missing /usr/bin/bash — looks broken"
     exit 1
 fi
 if ! command -v age >/dev/null 2>&1; then
