@@ -10,6 +10,10 @@
 #                                     (including age, openssh, etc.) in
 #                                     one shot. NOT encrypted — it's just
 #                                     public package state, no secrets.
+#                                     NOTE: prefix restore is fragile across
+#                                     Termux re-installs (SELinux contexts).
+#                                     Prefer the proot-ubuntu artifact below
+#                                     if you suspect a re-install scenario.
 #
 #   pixel-home-<date>.tar.age       — Full $HOME tarball, age-encrypted
 #                                     with a passphrase you provide. Excludes
@@ -20,7 +24,16 @@
 #                                     backups, APKs, and the linux-setups
 #                                     repo live, hence the encryption.
 #
-#   03-restore-snapshot.sh                  — Self-contained recovery script (copy
+#   proot-ubuntu-<date>.tar.gz.age  — Proot-distro container tarball (rootfs +
+#                                     manifest + sysdata), age-encrypted. Lives
+#                                     inside $PREFIX so is captured by termux-
+#                                     prefix too, but split out separately so
+#                                     it can be restored on a fresh Termux
+#                                     without restoring the brittle $PREFIX.
+#                                     Skipped automatically if no proot Ubuntu
+#                                     is installed.
+#
+#   03-restore-snapshot.sh          — Self-contained recovery script (copy
 #                                     of pixel/termux/03-restore-snapshot.sh from
 #                                     the repo). Placed on /sdcard so it
 #                                     survives Termux uninstall.
@@ -31,14 +44,16 @@
 #   3. bash ~/storage/shared/Download/03-restore-snapshot.sh
 #
 # the snapshot restore script restores $PREFIX first (which brings in age + tar +
-# openssh), then decrypts and extracts $HOME. After that, $HOME contains
-# the linux-setups repo so you can run pixel/client/04-restore-lxc.sh
-# to push the LXC backup back and restore the VM.
+# openssh), then decrypts and extracts $HOME, then restores the proot Ubuntu
+# rootfs separately so it survives even if you choose to skip the brittle
+# $PREFIX restore. After that, $HOME contains the linux-setups repo so you
+# can run pixel/client/04-restore-lxc.sh to push the LXC backup back and
+# restore the VM.
 #
-# Why this is split into THREE files rather than one mega-tarball: the
-# offline-recovery script needs age to decrypt the HOME tar, but age
+# Why this is split across files rather than one mega-tarball: the
+# offline-recovery script needs age to decrypt the encrypted tars, but age
 # isn't in a fresh Termux. termux-restore of $PREFIX is the bootstrap
-# layer that brings age into the system before HOME extraction.
+# layer that brings age into the system before encrypted-blob extraction.
 #
 # Why we DON'T put $HOME inside the termux-backup tarball: termux-backup
 # is hardcoded to back up ONLY $PREFIX (see its own header) — that's a
@@ -66,6 +81,7 @@
 #   --skip-prefix               skip the termux-backup of $PREFIX
 #                               (smaller snapshot but no offline package restore)
 #   --skip-home                 skip the $HOME tarball (PREFIX only)
+#   --skip-proot                skip the proot Ubuntu container backup
 #   --dest-dir <path>           output directory on /sdcard (default:
 #                               ~/storage/shared/Download)
 #
@@ -79,6 +95,7 @@
 #   TERMINAL_HOST     hostname for stock-terminal sync (default: stock-terminal)
 #   TERMINAL_PORT     port (default: 22)
 #   TERMINAL_USER     user (default: droid)
+#   PROOT_DISTRO      proot-distro container name to back up (default: ubuntu)
 
 set -euo pipefail
 
@@ -104,11 +121,13 @@ PODROID_USER="${PODROID_USER:-root}"
 TERMINAL_HOST="${TERMINAL_HOST:-stock-terminal}"
 TERMINAL_PORT="${TERMINAL_PORT:-22}"
 TERMINAL_USER="${TERMINAL_USER:-droid}"
+PROOT_DISTRO="${PROOT_DISTRO:-ubuntu}"
 
 SKIP_SYNC=0
 SKIP_APK=0
 SKIP_PREFIX=0
 SKIP_HOME=0
+SKIP_PROOT=0
 SKIP_FRESH_BACKUP=0
 INCLUDE_STOCK_TERMINAL=0
 DEST_DIR=""
@@ -119,10 +138,11 @@ while [ $# -gt 0 ]; do
         --skip-apk)               SKIP_APK=1; shift ;;
         --skip-prefix)            SKIP_PREFIX=1; shift ;;
         --skip-home)              SKIP_HOME=1; shift ;;
+        --skip-proot)             SKIP_PROOT=1; shift ;;
         --skip-fresh-backup)      SKIP_FRESH_BACKUP=1; shift ;;
         --include-stock-terminal) INCLUDE_STOCK_TERMINAL=1; shift ;;
         --dest-dir)               DEST_DIR="$2"; shift 2 ;;
-        -h|--help)                sed -n '2,78p' "$0"; exit 0 ;;
+        -h|--help)                sed -n '2,99p' "$0"; exit 0 ;;
         *) echo "unknown arg: $1" >&2; exit 1 ;;
     esac
 done
@@ -138,6 +158,7 @@ fi
 DATE_TAG=$(date +%F-%H%M)
 PREFIX_DEST="$DEST_DIR/termux-prefix-$DATE_TAG.tar.xz"
 HOME_DEST="$DEST_DIR/pixel-home-$DATE_TAG.tar.age"
+PROOT_DEST="$DEST_DIR/proot-${PROOT_DISTRO}-$DATE_TAG.tar.gz.age"
 RESTORE_SCRIPT_DEST="$DEST_DIR/03-restore-snapshot.sh"
 
 log()  { printf '\033[1;34m[snapshot]\033[0m %s\n' "$*"; }
@@ -149,7 +170,7 @@ if [ ! -d "$HOME/storage" ]; then
     err "~/storage doesn't exist. Run 'termux-setup-storage' first."
     exit 1
 fi
-if [ "$SKIP_HOME" -eq 0 ]; then
+if [ "$SKIP_HOME" -eq 0 ] || [ "$SKIP_PROOT" -eq 0 ]; then
     if ! command -v age >/dev/null 2>&1; then
         log "age not found — installing (one-time)"
         pkg install -y age
@@ -171,11 +192,11 @@ mkdir -p "$DEST_DIR"
 # ---- 1. refresh linux-setups repo ------------------------------------------
 LSDIR="$HOME/linux-setups"
 if [ -d "$LSDIR/.git" ]; then
-    log "[1/6] git pull on $LSDIR"
+    log "[1/7] git pull on $LSDIR"
     git -C "$LSDIR" pull --quiet --ff-only \
         || warn "git pull failed (offline?), using local copy"
 else
-    log "[1/6] cloning linux-setups into $LSDIR"
+    log "[1/7] cloning linux-setups into $LSDIR"
     git clone --quiet https://github.com/rynobey/linux-setups.git "$LSDIR"
 fi
 
@@ -183,12 +204,12 @@ fi
 mkdir -p "$HOME/apks"
 if [ -f "$PODROID_APK" ]; then
     apk_size=$(du -h "$PODROID_APK" | awk '{print $1}')
-    log "[2/6] custom Podroid APK present: $PODROID_APK ($apk_size)"
+    log "[2/7] custom Podroid APK present: $PODROID_APK ($apk_size)"
 else
     if [ "$SKIP_APK" -eq 1 ]; then
-        warn "[2/6] no APK at $PODROID_APK — bundling without (--skip-apk)"
+        warn "[2/7] no APK at $PODROID_APK — bundling without (--skip-apk)"
     else
-        err "[2/6] no APK at $PODROID_APK"
+        err "[2/7] no APK at $PODROID_APK"
         err "      download from your GH Actions build and place it there, or"
         err "      pass --skip-apk to bundle without it."
         exit 1
@@ -200,16 +221,16 @@ BUNDLE_BACKUPS="$HOME/recovery-bundle"
 mkdir -p "$BUNDLE_BACKUPS"
 
 if [ "$SKIP_SYNC" -eq 1 ]; then
-    log "[3/6] skipping VM backup + sync (--skip-sync); using existing files in $BUNDLE_BACKUPS"
+    log "[3/7] skipping VM backup + sync (--skip-sync); using existing files in $BUNDLE_BACKUPS"
 elif [ "$SKIP_FRESH_BACKUP" -eq 1 ]; then
-    log "[3/6] --skip-fresh-backup: pulling EXISTING Podroid LXC backups → $BUNDLE_BACKUPS"
+    log "[3/7] --skip-fresh-backup: pulling EXISTING Podroid LXC backups → $BUNDLE_BACKUPS"
     # Sync only, don't trigger a new backup on Alpine.
     LOCAL_DIR="$BUNDLE_BACKUPS" \
         DEV_HOST="$PODROID_HOST" DEV_PORT="$PODROID_PORT" DEV_USER="$PODROID_USER" \
         bash "$LSDIR/pixel/podroid/helper/sync-backups.sh" --pull \
         || warn "podroid sync failed; using existing files in $BUNDLE_BACKUPS"
 else
-    log "[3/6] creating FRESH Podroid LXC backup + syncing → $BUNDLE_BACKUPS"
+    log "[3/7] creating FRESH Podroid LXC backup + syncing → $BUNDLE_BACKUPS"
     log "       (passphrase prompt incoming — pick something you'll remember)"
     # Delegate to client/03-backup-lxc.sh which does the full
     # backup-on-Alpine + sync-to-client flow. ALPINE_* env vars are how
@@ -225,13 +246,13 @@ fi
 # Stock Terminal — separate from the Podroid flow above. Always sync-only
 # (no fresh backup wrapper for the Stock Terminal yet); enable via flag.
 if [ "$SKIP_SYNC" -eq 0 ] && [ "$INCLUDE_STOCK_TERMINAL" -eq 1 ]; then
-    log "[3/6] pulling Stock Terminal backups → $BUNDLE_BACKUPS"
+    log "[3/7] pulling Stock Terminal backups → $BUNDLE_BACKUPS"
     LOCAL_DIR="$BUNDLE_BACKUPS" \
         DEV_HOST="$TERMINAL_HOST" DEV_PORT="$TERMINAL_PORT" DEV_USER="$TERMINAL_USER" \
         bash "$LSDIR/pixel/stock-terminal/sync-backups.sh" --pull \
         || warn "stock-terminal sync failed; using existing files in $BUNDLE_BACKUPS"
 elif [ "$SKIP_SYNC" -eq 0 ] && [ "$INCLUDE_STOCK_TERMINAL" -eq 0 ]; then
-    log "[3/6]       skipping Stock Terminal (pass --include-stock-terminal to enable)"
+    log "[3/7]       skipping Stock Terminal (pass --include-stock-terminal to enable)"
 fi
 
 backup_count=$(find "$BUNDLE_BACKUPS" -maxdepth 1 -type f \
@@ -239,22 +260,24 @@ backup_count=$(find "$BUNDLE_BACKUPS" -maxdepth 1 -type f \
 log "      $backup_count backup file(s) in $BUNDLE_BACKUPS"
 
 # ---- 4. $PREFIX backup via termux-backup -----------------------------------
+prefix_size=""
 if [ "$SKIP_PREFIX" -eq 1 ]; then
-    log "[4/6] skipping \$PREFIX backup (--skip-prefix)"
+    log "[4/7] skipping \$PREFIX backup (--skip-prefix)"
 else
-    log "[4/6] writing \$PREFIX backup → $PREFIX_DEST"
+    log "[4/7] writing \$PREFIX backup → $PREFIX_DEST"
     log "      (this is what the snapshot restore script restores first, to bring age + ssh"
-    log "       + other tools into a fresh Termux before \$HOME decryption)"
+    log "       + other tools into a fresh Termux before encrypted-blob decryption)"
     termux-backup "$PREFIX_DEST"
     prefix_size=$(du -h "$PREFIX_DEST" | awk '{print $1}')
     log "      \$PREFIX backup: $prefix_size at $PREFIX_DEST"
 fi
 
 # ---- 5. full $HOME → age-encrypted tarball on /sdcard ----------------------
+home_size=""
 if [ "$SKIP_HOME" -eq 1 ]; then
-    log "[5/6] skipping \$HOME backup (--skip-home)"
+    log "[5/7] skipping \$HOME backup (--skip-home)"
 else
-    log "[5/6] writing encrypted \$HOME backup → $HOME_DEST"
+    log "[5/7] writing encrypted \$HOME backup → $HOME_DEST"
     log "      excluding: storage/ (broken SAF symlinks; recreated by termux-setup-storage)"
     log "      age will prompt for a passphrase — pick something you'll remember;"
     log "      you'll need it again to decrypt on the recovery side."
@@ -297,13 +320,40 @@ else
     fi
 fi
 
-# ---- 6. drop the 03-restore-snapshot.sh script next to the artifacts ---------------
+# ---- 6. proot Ubuntu container → age-encrypted tarball --------------------
+proot_size=""
+PROOT_CONTAINER_DIR="$PREFIX/var/lib/proot-distro/containers/$PROOT_DISTRO"
+if [ "$SKIP_PROOT" -eq 1 ]; then
+    log "[6/7] skipping proot Ubuntu backup (--skip-proot)"
+elif [ ! -d "$PROOT_CONTAINER_DIR" ]; then
+    log "[6/7] no proot-distro container at $PROOT_CONTAINER_DIR — skipping"
+    log "      (install with: bash $LSDIR/pixel/termux/04-install-proot-ubuntu.sh)"
+else
+    log "[6/7] writing encrypted proot $PROOT_DISTRO backup → $PROOT_DEST"
+    log "      (rootfs + manifest + sysdata. Restore-side counterpart:"
+    log "       pixel/termux/helper/restore-proot.sh)"
+    if ! bash "$LSDIR/pixel/termux/helper/backup-proot.sh" "$PROOT_DEST" "$PROOT_DISTRO"; then
+        err "      proot backup failed — partial file at $PROOT_DEST removed"
+        rm -f "$PROOT_DEST"
+        exit 1
+    fi
+    proot_size=$(du -h "$PROOT_DEST" | awk '{print $1}')
+    log "      proot bundle: $proot_size at $PROOT_DEST"
+fi
+
+# ---- 7. drop the 03-restore-snapshot.sh script next to the artifacts ------
 RESTORE_SCRIPT_SRC="$LSDIR/pixel/termux/03-restore-snapshot.sh"
 if [ -f "$RESTORE_SCRIPT_SRC" ]; then
-    log "[6/6] copying 03-restore-snapshot.sh → $RESTORE_SCRIPT_DEST"
+    log "[7/7] copying 03-restore-snapshot.sh → $RESTORE_SCRIPT_DEST"
     cp "$RESTORE_SCRIPT_SRC" "$RESTORE_SCRIPT_DEST"
+    # Also copy the proot helper so the restore script can find it via
+    # a relative path next to itself, even on a fresh phone before the
+    # repo is back.
+    RESTORE_HELPER_DIR="$DEST_DIR/restore-helpers"
+    mkdir -p "$RESTORE_HELPER_DIR"
+    cp "$LSDIR/pixel/termux/helper/restore-proot.sh" "$RESTORE_HELPER_DIR/" 2>/dev/null || true
 else
-    warn "[6/6] $RESTORE_SCRIPT_SRC not found — 03-restore-snapshot.sh NOT copied."
+    warn "[7/7] $RESTORE_SCRIPT_SRC not found — 03-restore-snapshot.sh NOT copied."
     warn "      on the recovery side you'd need to clone linux-setups first."
 fi
 
@@ -312,6 +362,7 @@ log ""
 log "Snapshot complete. Artifacts in $DEST_DIR/:"
 [ "$SKIP_PREFIX" -eq 0 ] && log "    $(basename "$PREFIX_DEST")  ($prefix_size)"
 [ "$SKIP_HOME"   -eq 0 ] && log "    $(basename "$HOME_DEST")  ($home_size)"
+[ -n "$proot_size" ]      && log "    $(basename "$PROOT_DEST")  ($proot_size)"
 [ -f "$RESTORE_SCRIPT_DEST" ] && log "    $(basename "$RESTORE_SCRIPT_DEST")"
 log ""
 if [ "$SKIP_HOME" -eq 0 ]; then

@@ -21,8 +21,19 @@ err()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; }
 CLIENT_DIR="${CLIENT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 LSDIR="${LSDIR:-$(cd "$CLIENT_DIR/../.." && pwd)}"
 
-# SSH connection defaults (override per-call via env / flags)
-ALPINE_HOST="${ALPINE_HOST:-localhost}"
+# SSH connection defaults (override per-call via env / flags).
+# Host varies by context:
+#   - Termux on the Pixel itself → localhost (reaches Alpine via the
+#     Podroid port forward bound to 0.0.0.0:9922)
+#   - Any other machine (laptop, server) → 'pixel' (the Pixel's
+#     Tailscale name, routes via tailnet to the same port forward).
+# Override via ALPINE_HOST=... if your Tailscale name differs.
+if [ -n "${PREFIX:-}" ] && [ -x "${PREFIX}/bin/pkg" ]; then
+    _ALPINE_HOST_DEFAULT="localhost"
+else
+    _ALPINE_HOST_DEFAULT="pixel"
+fi
+ALPINE_HOST="${ALPINE_HOST:-$_ALPINE_HOST_DEFAULT}"
 ALPINE_PORT="${ALPINE_PORT:-9922}"
 ALPINE_USER="${ALPINE_USER:-root}"
 LXC_NAME="${LXC_NAME:-pubuntu}"

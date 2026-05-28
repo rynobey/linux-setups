@@ -33,9 +33,13 @@ if [ -f /etc/alpine-release ]; then
 fi
 
 # ---- 1. base apt setup -----------------------------------------------------
+# bash-completion: the Noble LXC rootfs is minimal and omits it; without
+# it `make <TAB>`, `git <TAB>`, etc. don't complete. The default ~/.bashrc
+# already sources /usr/share/bash-completion/bash_completion when present,
+# so installing the package is all that's needed (takes effect in new shells).
 log "[1/5] updating apt + installing base tools"
 sudo apt-get update -y
-sudo apt-get install -y curl ca-certificates gnupg sudo
+sudo apt-get install -y curl ca-certificates gnupg sudo bash-completion
 
 # ---- 2. docker -------------------------------------------------------------
 if [ -z "${SKIP_DOCKER:-}" ]; then

@@ -74,7 +74,14 @@ fi
 LOCAL_SCRIPT="$1"
 shift
 
-ALPINE_HOST="${ALPINE_HOST:-localhost}"
+# Default ALPINE_HOST: Termux → localhost, other machines → 'pixel'.
+# See pixel/client/helper/_lib.sh for the full rationale.
+if [ -n "${PREFIX:-}" ] && [ -x "${PREFIX}/bin/pkg" ]; then
+    _ALPINE_HOST_DEFAULT="localhost"
+else
+    _ALPINE_HOST_DEFAULT="pixel"
+fi
+ALPINE_HOST="${ALPINE_HOST:-$_ALPINE_HOST_DEFAULT}"
 ALPINE_PORT="${ALPINE_PORT:-9922}"
 ALPINE_USER="${ALPINE_USER:-root}"
 LXC_NAME="${LXC_NAME:-pubuntu}"

@@ -111,6 +111,13 @@ lxc.cgroup.devices.allow = c 10:200 rwm
 lxc.cgroup2.devices.allow = c 10:200 rwm
 lxc.mount.entry = /dev/net dev/net none bind,create=dir 0 0
 
+# GPU: pass the Alpine guest's virtio-gpu render nodes (/dev/dri — present only
+# when the VM runs with podroid.gpu=1) into the LXC, so gfxstream-accelerated
+# Vulkan/GL works in pubuntu (see build-gfxstream-mesa.sh). 'optional' so the
+# container still starts when the GPU is off and there's no /dev/dri on the
+# host. Device access is already permitted by the all-devices cgroup rule above.
+lxc.mount.entry = /dev/dri dev/dri none bind,create=dir,optional 0 0
+
 # Persistence: bind Podroid's Android-backed share (Alpine's
 # ${SHARED_HOST}, which is /sdcard/Download/ on Android via the AVF
 # virtio-9p 'downloads' tag) into the LXC at /mnt/shared. Files saved

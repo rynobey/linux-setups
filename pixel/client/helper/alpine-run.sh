@@ -43,7 +43,15 @@ fi
 LOCAL_SCRIPT="$1"
 shift
 
-ALPINE_HOST="${ALPINE_HOST:-localhost}"
+# Default ALPINE_HOST varies: Termux → localhost (Podroid's port
+# forward), other machines → 'pixel' (Tailscale name routing to
+# the same forward). Override via env if needed.
+if [ -n "${PREFIX:-}" ] && [ -x "${PREFIX}/bin/pkg" ]; then
+    _ALPINE_HOST_DEFAULT="localhost"
+else
+    _ALPINE_HOST_DEFAULT="pixel"
+fi
+ALPINE_HOST="${ALPINE_HOST:-$_ALPINE_HOST_DEFAULT}"
 ALPINE_PORT="${ALPINE_PORT:-9922}"
 ALPINE_USER="${ALPINE_USER:-root}"
 
