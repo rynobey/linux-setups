@@ -391,7 +391,7 @@ EOF
 # Pubuntu Firefox — ssh + DISPLAY = direct-X bridge in Termux.
 # AVF_TAP_IP is filled at deploy time; if Podroid isn't running when 06
 # runs, we leave a placeholder and warn.
-DEPLOY_AVF_TAP_IP=$(ifconfig avf_tap_fixed 2>/dev/null | awk '/inet / {print $2}' | head -1)
+DEPLOY_AVF_TAP_IP=$(ifconfig 2>/dev/null | awk '/^avf_tap/ {found=1; next} found && /inet / {print $2; exit} /^[a-z]/ {found=0}')
 if [ -z "$DEPLOY_AVF_TAP_IP" ]; then
     DEPLOY_AVF_TAP_IP="10.198.187.116"   # known stable AVF TAP IP on Pixel 10
     warn "    avf_tap_fixed interface not present at deploy time;"
@@ -495,7 +495,7 @@ fi
 #                  bridge is bound to AVF TAP and that subnet is your own
 #                  VMs only.
 XAUTH_FILE="$HOME/.Xauthority"
-AVF_TAP_IP=$(ifconfig avf_tap_fixed 2>/dev/null | awk '/inet / {print $2}' | head -1)
+AVF_TAP_IP=$(ifconfig 2>/dev/null | awk '/^avf_tap/ {found=1; next} found && /inet / {print $2; exit} /^[a-z]/ {found=0}')
 if [ "$USE_XAUTH" = "1" ]; then
     if [ ! -s "$XAUTH_FILE" ] || ! xauth -f "$XAUTH_FILE" list 2>/dev/null \
             | grep -q "MIT-MAGIC-COOKIE-1"; then
@@ -520,14 +520,28 @@ else
     X11_AUTH_FLAGS="-ac"
 fi
 
-# Start the X server (kill any old one on this display first)
+# Start the X server (clean any stale socket first — Termux:X11 doesn't tidy
+# up its Unix socket when killed by Android, so a re-run after Android killed
+# the previous server fails with "Cannot establish any listening sockets". The
+# stale lock/socket needs removing before the new server can bind.)
+X_SOCK_FILE="$PREFIX/tmp/.X11-unix/X${DISPLAY_NUM}"
+X_LOCK_FILE="$PREFIX/tmp/.X${DISPLAY_NUM}-lock"
 if pgrep -f "termux-x11 :$DISPLAY_NUM" >/dev/null 2>&1; then
     echo "[start-x11] X server already running on :$DISPLAY_NUM"
 else
+    # No process — purge any stale socket / lock from a prior session
+    [ -e "$X_SOCK_FILE" ] && { echo "[start-x11] removing stale $X_SOCK_FILE"; rm -f "$X_SOCK_FILE"; }
+    [ -e "$X_LOCK_FILE" ] && { echo "[start-x11] removing stale $X_LOCK_FILE"; rm -f "$X_LOCK_FILE"; }
     echo "[start-x11] starting Termux:X11 on :$DISPLAY_NUM ($X11_AUTH_FLAGS)"
     nohup termux-x11 ":$DISPLAY_NUM" $X11_AUTH_FLAGS \
         >"$LOG_DIR/termux-x11.log" 2>&1 &
     sleep 1
+    # Verify it actually came up — termux-x11 exits silently on socket
+    # binding failure, so check by looking for the listening process.
+    if ! pgrep -f "termux-x11 :$DISPLAY_NUM" >/dev/null 2>&1; then
+        echo "[start-x11] WARNING: termux-x11 didn't start. Check $LOG_DIR/termux-x11.log"
+        tail -5 "$LOG_DIR/termux-x11.log" 2>/dev/null | sed 's/^/[start-x11]   /'
+    fi
 fi
 
 # 3. Sync cookie to pubuntu (best-effort) so the user doesn't have to.
@@ -635,7 +649,7 @@ if [ ! -s "$XAUTH_FILE" ]; then
     exit 1
 fi
 
-AVF_TAP_IP=$(ifconfig avf_tap_fixed 2>/dev/null | awk '/inet / {print $2}' | head -1)
+AVF_TAP_IP=$(ifconfig 2>/dev/null | awk '/^avf_tap/ {found=1; next} found && /inet / {print $2; exit} /^[a-z]/ {found=0}')
 if [ -z "$AVF_TAP_IP" ]; then
     echo "[sync-x11-cookie] avf_tap_fixed interface not present — is Podroid running?" >&2
     exit 1
