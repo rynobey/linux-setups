@@ -74,13 +74,26 @@ warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 #   socat                     Used by start-x11.sh for the direct-X bridge
 #                             so pubuntu can reach Termux:X11 over TCP
 #                             without paying SSH X-forward's single-thread cap.
-#   xauth                     Cookie management for USE_XAUTH=1.
+#   xorg-xauth                Cookie management for USE_XAUTH=1.
 #
 # Env knobs:
 #   START_PULSE             default 1   include pulseaudio (start-x11 uses it)
 #   INSTALL_TERMUX_FIREFOX  default 0   ALSO install Termux-native firefox.
-log "[0/4] installing Termux-side prereqs (X11, Mesa, Vulkan loader, virgl, socat, xauth)"
-pkg install -y x11-repo >/dev/null 2>&1 || true
+log "[0/4] installing Termux-side prereqs (X11, Mesa, Vulkan loader, virgl, socat, xorg-xauth, i3, ...)"
+
+# Make apt non-interactive end-to-end. Termux's `pkg` wraps apt; apt honours
+# both DEBIAN_FRONTEND and the dpkg confnew/confold options. Without these
+# an upgrade that triggers a conffile prompt (rare but real) hangs forever
+# waiting for stdin that doesn't exist.
+export DEBIAN_FRONTEND=noninteractive
+APT_OPTS=(
+    -y
+    -o "Dpkg::Options::=--force-confdef"
+    -o "Dpkg::Options::=--force-confold"
+    -o Acquire::Retries=3
+)
+
+pkg install "${APT_OPTS[@]}" x11-repo || true
 
 # vulkan-loader-generic and vulkan-loader-android collide (both ship libvulkan.so).
 # We want the -android one (hooks into Android's Vulkan layer, can reach
@@ -92,15 +105,22 @@ if dpkg -s vulkan-loader-generic >/dev/null 2>&1 \
     pkg uninstall -y vulkan-loader-generic >/dev/null 2>&1 || true
 fi
 
-TERMUX_PKGS="termux-x11-nightly mesa vulkan-loader-android mesa-vulkan-icd-swrast virglrenderer-android xorg-xrandr socat xauth"
+TERMUX_PKGS="termux-x11-nightly mesa vulkan-loader-android mesa-vulkan-icd-swrast virglrenderer-android xorg-xrandr socat xorg-xauth"
 # Window manager + GUI toolkit (Termux-native, replaces the old proot-i3 desktop)
 TERMUX_PKGS="$TERMUX_PKGS i3 i3status rofi xfce4-terminal dbus"
 [ "${START_PULSE:-1}" = "1" ]            && TERMUX_PKGS="$TERMUX_PKGS pulseaudio"
 [ "${INSTALL_TERMUX_FIREFOX:-0}" = "1" ] && TERMUX_PKGS="$TERMUX_PKGS firefox"
 
+# Show progress per-package so a hang is visible. apt's output is verbose but
+# diagnosable; the suppressed version masked the hangs we hit on 2026-05-29.
+# Skip already-installed packages so re-runs are cheap.
 for p in $TERMUX_PKGS; do
-    if ! dpkg -s "$p" >/dev/null 2>&1; then
-        pkg install -y "$p" >/dev/null 2>&1 || warn "    pkg install $p failed (continuing)"
+    if dpkg -s "$p" >/dev/null 2>&1; then
+        continue
+    fi
+    log "    installing $p"
+    if ! pkg install "${APT_OPTS[@]}" "$p"; then
+        warn "    pkg install $p failed (continuing — re-run later or install by hand)"
     fi
 done
 
@@ -320,6 +340,124 @@ MiscMenubarDefault=FALSE
 ShortcutsNoMnemonics=TRUE
 ShortcutsNoMenukey=FALSE
 EOF
+
+# ---- 1c. rofi config + pubuntu launchers -----------------------------------
+# rofi is the app launcher bound to $mod+d in the i3 config. We:
+#   1. Drop a rofi config that enables a combi mode (apps + windows + run +
+#      pubuntu-docker) so a single $mod+Tab gives everything at once.
+#   2. Drop .desktop files for common pubuntu-side apps so they show up in
+#      `rofi -show drun` alongside Termux-native apps. Each entry sshs into
+#      pubuntu and runs the app with DISPLAY pointing back at Termux:X11.
+#   3. Drop a small "rofi-pubuntu-docker" script that lists running pubuntu
+#      Docker containers and opens a shell into the picked one.
+
+log "[1c/4] writing ~/.config/rofi/config.rasi (theme + combi mode)"
+mkdir -p "$HOME/.config/rofi"
+write_with_backup "$HOME/.config/rofi/config.rasi" <<'EOF'
+configuration {
+    modi:        "drun,run,window,docker:~/.local/bin/rofi-pubuntu-docker";
+    combi-modi:  "drun,window,docker:~/.local/bin/rofi-pubuntu-docker";
+    show-icons:   true;
+    icon-theme:  "Adwaita";
+    display-drun:   " Apps";
+    display-run:    " Run";
+    display-window: " Windows";
+    display-docker: "🐳 Docker (pubuntu)";
+    display-combi:  " All";
+    /* On-screen-keyboard users often miss arrows — Tab cycles too. */
+    kb-row-down:    "Down,Control+j,Control+n,Tab";
+    kb-row-up:      "Up,Control+k,Control+p,ISO_Left_Tab";
+}
+
+/* Pick a built-in theme. List with `ls $PREFIX/share/rofi/themes/` and
+ * substitute below, or run `rofi-theme-selector` to browse interactively. */
+@theme "Arc-Dark"
+EOF
+
+log "[1c/4] writing pubuntu .desktop launchers in ~/.local/share/applications"
+mkdir -p "$HOME/.local/share/applications"
+
+# Pubuntu shell — opens xfce4-terminal with an SSH session into pubuntu.
+write_with_backup "$HOME/.local/share/applications/pubuntu-shell.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Pubuntu Shell
+Comment=SSH into pubuntu in a terminal
+Exec=xfce4-terminal -T "pubuntu" -e "ssh -p ${PUBUNTU_SSH_PORT} ${PUBUNTU_SSH_USER}@localhost"
+Icon=utilities-terminal
+Categories=System;TerminalEmulator;
+EOF
+
+# Pubuntu Firefox — ssh + DISPLAY = direct-X bridge in Termux.
+# AVF_TAP_IP is filled at deploy time; if Podroid isn't running when 06
+# runs, we leave a placeholder and warn.
+DEPLOY_AVF_TAP_IP=$(ifconfig avf_tap_fixed 2>/dev/null | awk '/inet / {print $2}' | head -1)
+if [ -z "$DEPLOY_AVF_TAP_IP" ]; then
+    DEPLOY_AVF_TAP_IP="10.198.187.116"   # known stable AVF TAP IP on Pixel 10
+    warn "    avf_tap_fixed interface not present at deploy time;"
+    warn "    .desktop launchers use $DEPLOY_AVF_TAP_IP as best-effort. Edit"
+    warn "    files in ~/.local/share/applications/ if your TAP IP differs."
+fi
+
+write_with_backup "$HOME/.local/share/applications/pubuntu-firefox.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Firefox (pubuntu)
+Comment=Firefox inside pubuntu, displayed via direct-X
+Exec=ssh -p ${PUBUNTU_SSH_PORT} ${PUBUNTU_SSH_USER}@localhost 'DISPLAY=${DEPLOY_AVF_TAP_IP}:0 nohup firefox %U >/dev/null 2>&1 &'
+Icon=firefox
+Categories=Network;WebBrowser;
+StartupNotify=false
+EOF
+
+# Pubuntu emergency kill — when an X app misbehaves, kill all pubuntu X clients
+write_with_backup "$HOME/.local/share/applications/pubuntu-kill-x.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Pubuntu — kill all X apps
+Comment=Kill every pubuntu process that has DISPLAY pointing at Termux:X11
+Exec=ssh -p ${PUBUNTU_SSH_PORT} ${PUBUNTU_SSH_USER}@localhost 'pkill -f "DISPLAY=${DEPLOY_AVF_TAP_IP}"'
+Icon=process-stop
+Categories=System;
+EOF
+
+log "[1c/4] writing ~/.local/bin/rofi-pubuntu-docker (custom rofi mode)"
+mkdir -p "$HOME/.local/bin"
+write_with_backup "$HOME/.local/bin/rofi-pubuntu-docker" <<EOF
+#!/data/data/com.termux/files/usr/bin/bash
+# rofi script-mode for pubuntu Docker.
+# - Called with no args: emit one menu entry per running container.
+# - Called with a selected entry as \$1: open a shell into that container
+#   via an xfce4-terminal popup.
+set -uo pipefail
+SSH_TARGET="${PUBUNTU_SSH_USER}@localhost"
+SSH_PORT=${PUBUNTU_SSH_PORT}
+
+if [ -z "\${1:-}" ]; then
+    # List running containers (name + image)
+    ssh -p "\$SSH_PORT" -o ConnectTimeout=3 "\$SSH_TARGET" \\
+        'docker ps --format "{{.Names}} ({{.Image}})"' 2>/dev/null
+else
+    # User picked one — open a shell. xfce4-terminal so it has a proper TTY.
+    NAME=\$(echo "\$1" | awk '{print \$1}')
+    if [ -n "\$NAME" ]; then
+        xfce4-terminal -T "docker: \$NAME" -e \\
+            "ssh -t -p \$SSH_PORT \$SSH_TARGET 'docker exec -it \$NAME bash'" &
+        disown
+    fi
+fi
+EOF
+chmod +x "$HOME/.local/bin/rofi-pubuntu-docker"
+
+# Add a $mod+Tab keybind to the i3 config for the combi mode (full launcher).
+# Append rather than rewriting so any custom edits the user makes survive.
+if ! grep -q "rofi -show combi" "$HOME/.config/i3/config"; then
+    cat >> "$HOME/.config/i3/config" <<'EOF'
+
+# Combi launcher (apps + windows + pubuntu docker) — added by 06.
+bindsym $mod+Tab exec --no-startup-id rofi -show combi
+EOF
+fi
 
 # ---- 2. start-x11.sh — fire up the display stack ---------------------------
 log "[2/4] writing ~/start-x11.sh"
@@ -562,6 +700,9 @@ log "    ~/runtime.env                  shared config (DISPLAY_NUM, USE_XAUTH, I
 log "    ~/.config/i3/config            i3 keybinds + workspaces (mod=$I3_MOD)"
 log "    ~/.local/bin/i3-cheatsheet     \$mod+slash popup of all keybinds"
 log "    ~/.config/xfce4/terminal/      no-Alt-menu terminal defaults"
+log "    ~/.config/rofi/config.rasi     rofi launcher theme + combi mode"
+log "    ~/.local/share/applications/   pubuntu launcher .desktop entries"
+log "    ~/.local/bin/rofi-pubuntu-docker  rofi script-mode for docker ps in pubuntu"
 log ""
 log "First-time GUI run:"
 log "    bash ~/start-x11.sh"
