@@ -10,21 +10,26 @@ flexibility and performance is:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ Termux-native i3 desktop on Termux:X11 — primary GUI                    │
-│   • all browsing, terminals, daily apps                                 │
+│ Termux-native + Termux:X11 — primary GUI                                │
+│   • all browsing, terminals, daily Termux-native apps                   │
 │   • virgl-accelerated GLES (clients off llvmpipe, onto PowerVR)         │
-│   • zero proot overhead                                                 │
+│   • Termux:X11 also acts as the display server for pubuntu X clients    │
+│     (direct X over TCP via socat bridge; SSH X-forward as fallback)     │
 │                                                                         │
 │   ┌────────────────────────────────────────────────────────────────┐   │
-│   │ SSH + X-forward window from Pubuntu (Podroid AVF VM)           │   │
+│   │ Pubuntu (Podroid AVF VM) reached via SSH on port 9923          │   │
 │   │   • dev tools, Docker, real systemd                            │   │
+│   │   • GUI apps render in pubuntu, display in Termux:X11          │   │
+│   │     via direct-X bridge (~110 MB/s) or ssh -Y (~8 MB/s)        │   │
 │   │   • gfxstream HW GPU inside the VM (once tasks #63/#64 land)   │   │
 │   └────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-│   (proot Ubuntu installed-but-optional, fallback for apt-only apps      │
-│    that aren't in Termux x11-repo and aren't worth firing up the VM)    │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+proot Ubuntu is **not** part of this architecture. Earlier drafts had it
+as an optional fallback layer; subsequent measurements showed proot's
+ptrace overhead dominated daily UX, and the Termux-native +
+pubuntu-via-SSH path covers every realistic use case.
 
 Winlator stays as a separate APK for gaming. None of this affects it.
 
@@ -64,11 +69,11 @@ touching the graphics stack.
 
 ### What that meant for the three layers we were juggling
 
-| Layer | Original role | Revised role |
+| Layer | Original role | Final role |
 |---|---|---|
 | Pubuntu (Podroid VM) | dev/services + occasional GUI via X-forward | unchanged — still the dev/services home |
-| proot Ubuntu | GPU-intensive interactive apps (browser, video) | demoted to optional fallback; not the daily desktop host |
-| Termux-native + Termux:X11 | display server only | promoted — runs the i3 desktop and all daily GUI apps |
+| proot Ubuntu | GPU-intensive interactive apps (browser, video) | **removed** — no longer in the architecture |
+| Termux-native + Termux:X11 | display server only | promoted — runs the desktop and all daily GUI apps |
 
 ## The architecture
 
@@ -95,14 +100,7 @@ touching the graphics stack.
   too. The display path stays "X over SSH" which is fine for 2D widget
   UIs, slow for 3D / video.
 
-### Layer C: proot Ubuntu (optional fallback)
-
-- Kept installed for apt-only Linux apps not in Termux's x11-repo and
-  not worth firing up the VM for (e.g. a one-off LibreOffice edit).
-- Not used as the i3 host any more.
-- Free to remove if you prefer the cleaner stack — costs ~1.3 GB.
-
-### Layer D: Winlator (gaming)
+### Layer C: Winlator (gaming)
 
 - Standalone APK. Doesn't interact with anything above.
 - Has its own Vortek-based Vulkan bridge for hardware acceleration of
@@ -591,7 +589,11 @@ Despite the speed loss, prefer SSH X-forward for:
 - **Daily-use simplicity** if the SSH ~8 MB/s ceiling doesn't bother
   you — you've already proven 2D widget apps feel native at that rate.
 
-### Optional hardening: xauth cookies (the right second layer)
+### Default hardening (since 2026-05-29): xauth cookies
+
+The runtime setup defaults to `USE_XAUTH=1` (cookie auth on Termux:X11,
+auto-deployed to pubuntu over SSH). The `-ac` no-auth mode is opt-out
+via `USE_XAUTH=0` in `~/proot.env`. Reasoning below.
 
 For the threat we care about — a Docker container or other untrusted
 code path *inside* pubuntu attaching to the X server — the protection

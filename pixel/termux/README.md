@@ -18,14 +18,10 @@ Termux serves two purposes in this setup:
 | Script | Purpose |
 |---|---|
 | [`01-init-termux.sh`](01-init-termux.sh) | One-shot fresh Termux setup: packages, storage, ed25519 key, repo clone, sshd. |
-| [`02-snapshot.sh`](02-snapshot.sh) | Create a recovery snapshot: termux-backup of `$PREFIX` + age-encrypted tar of `$HOME` + age-encrypted proot Ubuntu rootfs → `/sdcard/Download/`. |
+| [`02-snapshot.sh`](02-snapshot.sh) | Create a recovery snapshot: termux-backup of `$PREFIX` + age-encrypted tar of `$HOME` → `/sdcard/Download/`. |
 | [`03-restore-snapshot.sh`](03-restore-snapshot.sh) | Restore from a snapshot on a freshly-installed Termux. |
-| [`04-install-proot-ubuntu.sh`](04-install-proot-ubuntu.sh) | Install Ubuntu via proot-distro (defaults to whatever the `ubuntu` alias currently maps to — usually the latest interim release; LTS via `PD_OVERRIDE_TARBALL_URL` — see script header) and create a sudo-capable user. |
-| [`05-bootstrap-proot-desktop.sh`](05-bootstrap-proot-desktop.sh) | Inside proot: install i3 + GUI toolkit + Firefox, write i3 config. |
-| [`06-deploy-runtime-scripts.sh`](06-deploy-runtime-scripts.sh) | Deploy `~/start-x11.sh`, `~/start-proot.sh`, `~/stop-x11.sh` runtime scripts. |
-| [`setup-desktop.sh`](setup-desktop.sh) | One-shot orchestrator that runs 04 + 05 + 06 with progress banners. |
-| [`helper/backup-proot.sh`](helper/backup-proot.sh) | Tar + age-encrypt a proot-distro container to a single file. |
-| [`helper/restore-proot.sh`](helper/restore-proot.sh) | Decrypt + extract a proot-distro container backup, verify it executes. |
+| [`06-deploy-runtime-scripts.sh`](06-deploy-runtime-scripts.sh) | Install Termux-side prereqs (mesa, vulkan loader, virgl, socat, xauth) + deploy `~/start-x11.sh`, `~/stop-x11.sh`, `~/sync-x11-cookie.sh`, `~/runtime.env`. |
+| [`setup-desktop.sh`](setup-desktop.sh) | Convenience wrapper around 06. |
 
 **The Podroid / LXC workflows aren't in here** — they're in
 [`../client/`](../client/) (cross-context: Termux + laptop). This dir
@@ -35,9 +31,9 @@ only holds Termux-specific entry scripts.
 
 ```
 01-init-termux.sh                       # Termux base (packages, ssh, repo, sshd)
-setup-desktop.sh                         # → 04 + 05 + 06 in one shot
-~/start-x11.sh                           # bring up Termux:X11 + i3 desktop in proot
-02-snapshot.sh                           # snapshot (includes proot Ubuntu now)
+setup-desktop.sh                         # install Termux X11/Mesa/virgl + runtime scripts
+~/start-x11.sh                           # bring up Termux:X11 + direct-X bridge for pubuntu
+02-snapshot.sh                           # recovery snapshot of $PREFIX + $HOME
 ```
 
 ## First-time setup (fresh Termux)
@@ -72,25 +68,19 @@ scripts can ssh in.
 ~/linux-setups/pixel/termux/02-snapshot.sh
 ```
 
-Produces up to four artifacts in `~/storage/shared/Download/`:
+Produces three artifacts in `~/storage/shared/Download/`:
 
 1. **`termux-prefix-<date>.tar.xz`** — `termux-backup` of `$PREFIX`
    (all installed Termux packages). Not encrypted (public package
    state only). NOTE: prefix restore is fragile across Termux
-   re-installs (SELinux-context mismatch can leave proot unable to
-   execve anything — see the `termux-proot-broken-pixel10` memory).
-   In cross-install scenarios skip with `--skip-prefix` and lean on
-   the proot artifact below.
+   re-installs (SELinux-context mismatch can confuse some apps).
+   In cross-install scenarios skip with `--skip-prefix` and reinstall
+   packages from scratch after the `$HOME` restore.
 2. **`pixel-home-<date>.tar.age`** — full `$HOME` tarball,
    age-encrypted with a passphrase you provide. Contains your SSH
-   keys, the linux-setups repo, downloaded APKs, and any LXC backups
-   in `~/recovery-bundle/`.
-3. **`proot-ubuntu-<date>.tar.gz.age`** — proot-distro container
-   (rootfs + manifest + sysdata), age-encrypted. Survives Termux
-   re-installs because it's a pure-file tar restored by `helper/
-   restore-proot.sh`, no SELinux context baggage. Skipped if no
-   proot Ubuntu is installed yet.
-4. **`03-restore-snapshot.sh`** — copy of this directory's restore
+   keys, the linux-setups repo, downloaded APKs, the `~/.Xauthority`
+   cookie for direct-X, and any LXC backups in `~/recovery-bundle/`.
+3. **`03-restore-snapshot.sh`** — copy of this directory's restore
    script, placed alongside the artifacts so a fresh Termux can find it.
 
 All three sit on Android public storage, so they survive Termux

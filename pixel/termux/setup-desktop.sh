@@ -1,59 +1,39 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# One-shot orchestrator that runs 04 + 05 + 06 in sequence — the
-# DroidDesk-equivalent for this fork:
+# One-shot Termux:X11 + direct-X bridge setup. Calls 06 (which installs
+# the Termux-side prereq packages and deploys the runtime scripts).
 #
-#   04   install Ubuntu 24.04 proot + user with sudo
-#   05   apt-install i3 + GUI toolkit + Firefox inside it; write i3 config
-#   06   deploy ~/start-x11.sh, ~/start-proot.sh, ~/stop-x11.sh in Termux $HOME
+# Was historically a 3-step orchestrator covering proot-Ubuntu install,
+# i3 bootstrap, and runtime-scripts deploy. The proot layers were
+# removed once we settled on Termux-native + pubuntu via SSH/X-forward
+# (with direct-X-over-TCP bridging) as the architecture. See
+# pixel/docs/pixel-desktop-architecture.md.
 #
-# Idempotent — each sub-script is. Safe to re-run.
-#
-# Run after 01-init-termux.sh. Designed to work both on-device and over
-# SSH (it doesn't need a tty or foreground; the GUI only fires when you
-# explicitly call ~/start-x11.sh later).
-#
-# Env overrides flow through to the sub-scripts. Common ones:
-#   PROOT_USER       default: ryno
-#   PROOT_DISTRO     default: ubuntu (Noble 24.04 LTS)
-#   I3_MOD           default: Mod4   (Super; set Mod1 for Alt-only keyboards)
-#   INSTALL_FIREFOX  default: 1
-#   FORCE_REINSTALL  default: 0      set 1 to nuke + reinstall the rootfs
+# Env overrides — see 06-deploy-runtime-scripts.sh.
 
 set -euo pipefail
 
 LSDIR="${LSDIR:-$HOME/linux-setups}"
 HERE="$LSDIR/pixel/termux"
 
-log()   { printf '\033[1;32m[setup-desktop]\033[0m %s\n' "$*"; }
-warn()  { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
-err()   { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; }
-banner(){
-    local n="$1" total="$2" name="$3"
-    local bar; bar=$(printf '%*s' 60 '' | tr ' ' '=')
-    printf '\n\033[1;36m%s\n  STEP %d/%d  %s\n%s\033[0m\n\n' "$bar" "$n" "$total" "$name" "$bar"
-}
+log()    { printf '\033[1;32m[setup-desktop]\033[0m %s\n' "$*"; }
+err()    { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; }
 
 if [ ! -d "$HERE" ]; then
     err "expected scripts at $HERE — set LSDIR=path-to-linux-setups if non-default"
     exit 1
 fi
 
-TOTAL=3
-
-banner 1 $TOTAL "Install proot Ubuntu 24.04 + user"
-bash "$HERE/04-install-proot-ubuntu.sh"
-
-banner 2 $TOTAL "Bootstrap i3 + GUI toolkit inside proot Ubuntu"
-bash "$HERE/05-bootstrap-proot-desktop.sh"
-
-banner 3 $TOTAL "Deploy ~/start-x11.sh, ~/start-proot.sh, ~/stop-x11.sh"
 bash "$HERE/06-deploy-runtime-scripts.sh"
 
 log ""
-log "Desktop setup complete. To use:"
-log "  bash ~/start-x11.sh       # bring up the Termux:X11 + i3 desktop"
-log "  bash ~/start-proot.sh     # plain proot Ubuntu shell (no GUI)"
-log "  bash ~/stop-x11.sh        # tear down the desktop"
+log "Desktop runtime scripts deployed. To use:"
+log "  bash ~/start-x11.sh       # bring up Termux:X11 + direct-X bridge"
+log "  bash ~/stop-x11.sh        # tear it down"
 log ""
-log "Make a recovery snapshot (now includes the proot rootfs):"
+log "Then launch X apps from a Termux shell or via SSH into pubuntu:"
+log "  Termux-native:   DISPLAY=:0 firefox &"
+log "  Pubuntu:         ssh -p 9923 ryno@localhost"
+log "                   export DISPLAY=10.198.187.116:0 ; xeyes &"
+log ""
+log "Make a recovery snapshot of \$PREFIX + \$HOME:"
 log "  bash $HERE/02-snapshot.sh"

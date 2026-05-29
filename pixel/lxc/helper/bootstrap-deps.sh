@@ -37,9 +37,20 @@ fi
 # it `make <TAB>`, `git <TAB>`, etc. don't complete. The default ~/.bashrc
 # already sources /usr/share/bash-completion/bash_completion when present,
 # so installing the package is all that's needed (takes effect in new shells).
-log "[1/5] updating apt + installing base tools"
+#
+# X11 client tools:
+#   xauth      — required for cookie-auth X-forward to Termux:X11 (see
+#                pixel/docs/pixel-desktop-architecture.md security section).
+#                Without it, ssh -Y silently fails to set DISPLAY, AND the
+#                direct-X-over-TCP path can't authenticate against Termux's
+#                cookie-protected X server.
+#   x11-apps   — xeyes, xclock, etc. — quick smoke tests for X-forward.
+#   x11-utils  — xdpyinfo, xprop, xkill — for debugging the X path.
+#   mesa-utils — glxinfo / glxgears for verifying the GL path works.
+log "[1/5] updating apt + installing base tools + X11 client kit"
 sudo apt-get update -y
-sudo apt-get install -y curl ca-certificates gnupg sudo bash-completion
+sudo apt-get install -y curl ca-certificates gnupg sudo bash-completion \
+                        xauth x11-apps x11-utils mesa-utils
 
 # ---- 2. docker -------------------------------------------------------------
 if [ -z "${SKIP_DOCKER:-}" ]; then

@@ -12,27 +12,21 @@
 #   2. Decrypt + extract $HOME from
 #      ~/storage/shared/Download/pixel-home-<date>.tar.age via age +
 #      tar. Prompts for the bundle passphrase.
-#   3. Restore the proot Ubuntu container from
-#      ~/storage/shared/Download/proot-ubuntu-<date>.tar.gz.age if one
-#      exists. Independent of the $PREFIX restore, so safe to use even
-#      when $PREFIX restore is skipped (cross-install scenarios).
 #
 # Why this order: a fresh Termux doesn't ship with age. Restoring $PREFIX
 # first brings age into $PREFIX/bin so we can decrypt the encrypted
-# bundles in steps 2 + 3. Without this ordering you'd need network
+# $HOME bundle in step 2. Without this ordering you'd need network
 # access to `pkg install age` first, which defeats the offline-recovery
 # goal — unless you pass --skip-prefix, in which case you should
-# `pkg install age openssh proot-distro tar` first.
+# `pkg install age openssh tar` first.
 #
 # Flags:
 #   --skip-prefix   Don't run termux-restore. Use this if you suspect
 #                   cross-install contamination (Play Store → F-Droid, or
-#                   anything that's left residual SELinux categories);
-#                   the prefix backup will then break proot. You'll need
-#                   network + `pkg install age openssh proot-distro tar`
+#                   anything that's left residual SELinux categories).
+#                   You'll need network + `pkg install age openssh tar`
 #                   manually before running.
 #   --skip-home     Don't decrypt + extract $HOME (PREFIX only).
-#   --skip-proot    Don't restore the proot Ubuntu container.
 #
 # Idempotent caveat: termux-restore uses `tar --recursive-unlink` to
 # erase the target dirs before extracting. So running this twice IS
@@ -44,13 +38,11 @@ set -euo pipefail
 
 SKIP_PREFIX=0
 SKIP_HOME=0
-SKIP_PROOT=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --skip-prefix) SKIP_PREFIX=1; shift ;;
         --skip-home)   SKIP_HOME=1;   shift ;;
-        --skip-proot)  SKIP_PROOT=1;  shift ;;
-        -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,35p' "$0"; exit 0 ;;
         *) echo "unknown arg: $1" >&2; exit 1 ;;
     esac
 done
@@ -82,12 +74,11 @@ log "using artifact dir: $DL"
 
 PREFIX_TAR=$(ls -t "$DL"/termux-prefix-*.tar.xz 2>/dev/null | head -1 || true)
 HOME_TAR=$(ls -t "$DL"/pixel-home-*.tar.age 2>/dev/null | head -1 || true)
-PROOT_TAR=$(ls -t "$DL"/proot-*.tar.gz.age 2>/dev/null | head -1 || true)
 
 if [ "$SKIP_PREFIX" -eq 0 ] && [ -z "$PREFIX_TAR" ]; then
     err "no termux-prefix-*.tar.xz in $DL"
     err "  expected something like: termux-prefix-2026-05-26.tar.xz"
-    err "  (pass --skip-prefix to bypass — but then 'pkg install age openssh proot-distro tar' first)"
+    err "  (pass --skip-prefix to bypass — but then 'pkg install age openssh tar' first)"
     exit 1
 fi
 if [ "$SKIP_HOME" -eq 0 ] && [ -z "$HOME_TAR" ]; then
@@ -99,14 +90,13 @@ fi
 log "found artifacts:"
 [ -n "$PREFIX_TAR" ] && log "    PREFIX: $PREFIX_TAR ($(du -h "$PREFIX_TAR" | awk '{print $1}'))"
 [ -n "$HOME_TAR"   ] && log "    HOME:   $HOME_TAR ($(du -h "$HOME_TAR" | awk '{print $1}'))"
-[ -n "$PROOT_TAR"  ] && log "    PROOT:  $PROOT_TAR ($(du -h "$PROOT_TAR" | awk '{print $1}'))"
 echo
 
 # ---- 1. restore $PREFIX ----------------------------------------------------
 if [ "$SKIP_PREFIX" -eq 1 ]; then
-    log "[1/3] skipping \$PREFIX restore (--skip-prefix)"
-    # Make sure we have age, tar, proot-distro from somewhere else.
-    for cmd in age tar proot-distro; do
+    log "[1/2] skipping \$PREFIX restore (--skip-prefix)"
+    # Make sure we have age, tar from somewhere else.
+    for cmd in age tar; do
         if ! command -v "$cmd" >/dev/null 2>&1; then
             err "      $cmd not available — \`pkg install $cmd\` before continuing"
             exit 1
@@ -118,7 +108,7 @@ else
     # until the script exits — so the script continues to run uninterrupted
     # while the on-disk $PREFIX is replaced. Forked-and-exec'd child processes
     # (tar, age, etc.) pick up the new binaries, which is what we want.
-    log "[1/3] restoring \$PREFIX from $(basename "$PREFIX_TAR") ..."
+    log "[1/2] restoring \$PREFIX from $(basename "$PREFIX_TAR") ..."
     log "      (this can take a minute — termux-restore wipes \$PREFIX then untars)"
     termux-restore "$PREFIX_TAR"
 
@@ -137,9 +127,9 @@ echo
 
 # ---- 2. restore $HOME ------------------------------------------------------
 if [ "$SKIP_HOME" -eq 1 ]; then
-    log "[2/3] skipping \$HOME restore (--skip-home)"
+    log "[2/2] skipping \$HOME restore (--skip-home)"
 else
-    log "[2/3] decrypting + extracting \$HOME from $(basename "$HOME_TAR") ..."
+    log "[2/2] decrypting + extracting \$HOME from $(basename "$HOME_TAR") ..."
     log "      you'll be prompted for the bundle passphrase."
 
     # Pipe age's plaintext stdout into tar. Strip ownership info on extract
@@ -149,43 +139,9 @@ else
 fi
 echo
 
-# ---- 3. restore proot Ubuntu container ------------------------------------
-if [ "$SKIP_PROOT" -eq 1 ]; then
-    log "[3/3] skipping proot restore (--skip-proot)"
-elif [ -z "$PROOT_TAR" ]; then
-    log "[3/3] no proot-*.tar.gz.age artifact in $DL — skipping (this is fine if you didn't install proot Ubuntu yet)"
-else
-    # Restore helper might be:
-    #   - in $HOME after the $HOME restore (if it shipped linux-setups)
-    #   - in $DL/restore-helpers/ (placed there by 02-snapshot.sh step 7)
-    HELPER=""
-    for candidate in \
-        "$HOME/linux-setups/pixel/termux/helper/restore-proot.sh" \
-        "$DL/restore-helpers/restore-proot.sh"; do
-        if [ -x "$candidate" ] || [ -f "$candidate" ]; then
-            HELPER="$candidate"
-            break
-        fi
-    done
-    if [ -z "$HELPER" ]; then
-        warn "[3/3] no restore-proot.sh helper found — skipping proot restore."
-        warn "      Manual fallback (works as long as proot-distro is installed):"
-        warn "        age -d '$PROOT_TAR' \\"
-        warn "          | tar -C \$PREFIX/var/lib/proot-distro/containers -xf -"
-        warn "        proot-distro login ubuntu -- /bin/true   # verify"
-    else
-        log "[3/3] restoring proot from $(basename "$PROOT_TAR") via $HELPER"
-        # FORCE=1 so it overwrites a stale container without an interactive prompt
-        # (this is the restore script — the user clearly intends to overwrite).
-        FORCE=1 bash "$HELPER" "$PROOT_TAR"
-    fi
-fi
-echo
-
 log "Done. Restored:"
 [ "$SKIP_PREFIX" -eq 0 ] && log "    \$PREFIX from $PREFIX_TAR"
 [ "$SKIP_HOME"   -eq 0 ] && log "    \$HOME   from $HOME_TAR"
-[ "$SKIP_PROOT"  -eq 0 ] && [ -n "$PROOT_TAR" ] && log "    proot   from $PROOT_TAR"
 log ""
 log "Next steps:"
 log "  - If sshd / pubkey-authorize aren't running, re-run init's later"
@@ -195,6 +151,6 @@ log "  - For the full Podroid + LXC restore (sideload APK + push backup"
 log "    + restore inside Alpine), use the client/ entry scripts:"
 log "      bash ~/linux-setups/pixel/client/01-deploy-podroid.sh"
 log "      bash ~/linux-setups/pixel/client/04-restore-lxc.sh --latest"
-log "  - To bring up the proot Ubuntu desktop (i3 on Termux:X11):"
+log "  - To bring up Termux:X11 + the direct-X bridge for pubuntu GUI work:"
 log "      bash ~/linux-setups/pixel/termux/06-deploy-runtime-scripts.sh"
 log "      bash ~/start-x11.sh"

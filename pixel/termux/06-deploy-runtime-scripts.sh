@@ -1,34 +1,40 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # Deploy the day-to-day runtime scripts to Termux $HOME:
 #
-#   ~/start-x11.sh        Launch the whole desktop:
-#                           - kick the Termux:X11 Android app via `am start`
-#                           - start a Termux-side X11 + pulseaudio
-#                           - open a proot session as the user and run i3
-#   ~/start-proot.sh      Drop into a proot Ubuntu shell as the configured user
-#                         (no X11 — just a Linux terminal session).
-#   ~/stop-x11.sh         Tear it all down (kill i3 inside proot, stop the X
-#                         server, the Termux:X11 activity stays for re-use).
-#   ~/proot.env           Small env file the above scripts source so values
-#                         stay in sync with what 04/05 used.
+#   ~/start-x11.sh         Bring up Termux:X11 + direct-X TCP bridge + audio.
+#                          Generates an xauth cookie and (best-effort) deploys
+#                          it to pubuntu over SSH.
+#   ~/stop-x11.sh          Tear it all down (X server, direct-X bridge,
+#                          pulseaudio; leaves the Termux:X11 Android activity
+#                          alone — cheap to keep running).
+#   ~/sync-x11-cookie.sh   Manual cookie deploy helper for when pubuntu was
+#                          down at start-x11 time or got rebuilt.
+#   ~/runtime.env          Small env file the above scripts source so values
+#                          stay in sync.
+#
+# This script also installs the Termux-side packages the runtime scripts
+# depend on (x11-repo, mesa, vulkan-loader-android, virgl, socat, ...).
 #
 # Re-running overwrites the deployed scripts (keeps a .bak copy of each).
 # Edits you make to deployed scripts go away on re-run; edit this script
 # (or its embedded heredocs) for persistent changes.
 #
 # Env overrides:
-#   PROOT_DISTRO     default: ubuntu
-#   PROOT_USER       default: ryno
 #   DISPLAY_NUM      default: 0          (Termux:X11 listens on :0 by default)
 #   START_PULSE      default: 1          set 0 to skip pulseaudio
+#   USE_XAUTH        default: 1          start Termux:X11 with cookie auth
+#                                        (-auth ~/.Xauthority); set 0 for
+#                                        permissive -ac mode (no auth). Cookie
+#                                        is auto-deployed to pubuntu via SSH
+#                                        if reachable. See architecture doc.
+#   PUBUNTU_SSH_PORT default: 9923       for cookie auto-deploy target
+#   PUBUNTU_SSH_USER default: ryno
 
 set -euo pipefail
 
-PROOT_DISTRO="${PROOT_DISTRO:-ubuntu}"
-PROOT_USER="${PROOT_USER:-ryno}"
 DISPLAY_NUM="${DISPLAY_NUM:-0}"
 START_PULSE="${START_PULSE:-1}"
-USE_XAUTH="${USE_XAUTH:-0}"
+USE_XAUTH="${USE_XAUTH:-1}"
 PUBUNTU_SSH_PORT="${PUBUNTU_SSH_PORT:-9923}"
 PUBUNTU_SSH_USER="${PUBUNTU_SSH_USER:-ryno}"
 
@@ -38,27 +44,27 @@ warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 # ---- 0. Termux-side prereqs (the runtime scripts need these) -------------
 # DroidDesk's "Mesa Zink Core" + "Vulkan Loader" step came down to a handful
 # of Termux packages from x11-repo. Without them the X server (Termux:X11)
-# and any Termux-native graphical app fall back to all-software rendering,
-# which is the perceived video-stutter problem on PowerVR.
+# and any Termux-native graphical app fall back to all-software rendering.
 #
-# Notes per package:
-#   mesa                          OpenGL implementation (includes Zink)
-#   vulkan-loader-android         Vulkan ICD loader, Android-specific build
-#   mesa-vulkan-icd-swrast        Software Vulkan (lavapipe). PowerVR DXT has
-#                                 no Mesa Vulkan ICD (PVR driver is Rogue-only),
-#                                 so swrast is the workable fallback Vulkan.
-#   virglrenderer-android         GL-over-virgl backend Termux:X11 can use
-#                                 for GPU-rendered windows.
-#   xorg-xrandr                   Resolution control (e.g. for external display).
+# Per package:
+#   termux-x11-nightly        the Termux:X11 server (Lorie)
+#   mesa                      OpenGL implementation (includes Zink)
+#   vulkan-loader-android     Vulkan ICD loader, Android-specific build
+#   mesa-vulkan-icd-swrast    Software Vulkan (lavapipe). PowerVR DXT has no
+#                             Mesa Vulkan ICD (PVR is Rogue-only), so swrast
+#                             is the workable fallback Vulkan.
+#   virglrenderer-android     GL-over-virgl backend (Mesa virpipe driver
+#                             targets it for HW-GLES via Android EGL).
+#   xorg-xrandr               Resolution control (e.g. for external display).
+#   socat                     Used by start-x11.sh for the direct-X bridge
+#                             so pubuntu can reach Termux:X11 over TCP
+#                             without paying SSH X-forward's single-thread cap.
+#   xauth                     Cookie management for USE_XAUTH=1.
 #
 # Env knobs:
-#   START_PULSE             default 1   include pulseaudio (~/start-x11.sh uses it)
-#   INSTALL_TERMUX_FIREFOX  default 0   ALSO install Termux-native firefox as
-#                                       a smoother alternative to proot-firefox
-#                                       (this is what DroidDesk's "smooth video"
-#                                       experience was actually using). Launch
-#                                       from a Termux shell with DISPLAY=:0.
-log "[0/4] installing Termux-side prereqs (X11, Mesa, Vulkan loader, virgl)"
+#   START_PULSE             default 1   include pulseaudio (start-x11 uses it)
+#   INSTALL_TERMUX_FIREFOX  default 0   ALSO install Termux-native firefox.
+log "[0/4] installing Termux-side prereqs (X11, Mesa, Vulkan loader, virgl, socat, xauth)"
 pkg install -y x11-repo >/dev/null 2>&1 || true
 
 # vulkan-loader-generic and vulkan-loader-android collide (both ship libvulkan.so).
@@ -71,7 +77,7 @@ if dpkg -s vulkan-loader-generic >/dev/null 2>&1 \
     pkg uninstall -y vulkan-loader-generic >/dev/null 2>&1 || true
 fi
 
-TERMUX_PKGS="termux-x11-nightly mesa vulkan-loader-android mesa-vulkan-icd-swrast virglrenderer-android xorg-xrandr socat"
+TERMUX_PKGS="termux-x11-nightly mesa vulkan-loader-android mesa-vulkan-icd-swrast virglrenderer-android xorg-xrandr socat xauth"
 [ "${START_PULSE:-1}" = "1" ]            && TERMUX_PKGS="$TERMUX_PKGS pulseaudio"
 [ "${INSTALL_TERMUX_FIREFOX:-0}" = "1" ] && TERMUX_PKGS="$TERMUX_PKGS firefox"
 
@@ -88,59 +94,44 @@ write_with_backup() {
     chmod +x "$path"
 }
 
-# ---- 1. proot.env (sourced by the other scripts) ---------------------------
-log "[1/4] writing ~/proot.env"
-write_with_backup "$HOME/proot.env" <<EOF
+# ---- 1. runtime.env (sourced by the other scripts) -------------------------
+log "[1/4] writing ~/runtime.env"
+write_with_backup "$HOME/runtime.env" <<EOF
 # Generated by pixel/termux/06-deploy-runtime-scripts.sh — DO NOT edit manually;
 # re-run the deploy script if these need to change.
-export PROOT_DISTRO="$PROOT_DISTRO"
-export PROOT_USER="$PROOT_USER"
 export DISPLAY_NUM="$DISPLAY_NUM"
 export START_PULSE="$START_PULSE"
-# X11 auth — set USE_XAUTH=1 to start Termux:X11 with magic-cookie auth
-# instead of -ac (no auth). Cookies are written to ~/.Xauthority and
-# auto-synced to pubuntu over SSH (best-effort) if reachable.
+# X11 auth: default ON. Termux:X11 starts with magic-cookie auth
+# (-auth ~/.Xauthority); cookies are auto-synced to pubuntu over SSH if
+# reachable. Set USE_XAUTH=0 to fall back to the permissive -ac mode.
 # See pixel/docs/pixel-desktop-architecture.md (security section).
 export USE_XAUTH="$USE_XAUTH"
 export PUBUNTU_SSH_PORT="$PUBUNTU_SSH_PORT"
 export PUBUNTU_SSH_USER="$PUBUNTU_SSH_USER"
 EOF
 
-# ---- 2. start-proot.sh — terminal-only entry into the proot Linux env ------
-log "[2/4] writing ~/start-proot.sh"
-write_with_backup "$HOME/start-proot.sh" <<'EOF'
-#!/data/data/com.termux/files/usr/bin/bash
-# Drop into the proot Ubuntu shell as the configured user.
-# Pass extra args to forward them to bash inside proot, e.g.:
-#   ./start-proot.sh -c "uname -a"
-set -euo pipefail
-source ~/proot.env
-exec proot-distro login "$PROOT_DISTRO" --user "$PROOT_USER" -- bash --login "$@"
-EOF
-
-# ---- 3. start-x11.sh — fire up everything for a GUI session ----------------
-log "[3/4] writing ~/start-x11.sh"
+# ---- 2. start-x11.sh — fire up the display stack ---------------------------
+log "[2/4] writing ~/start-x11.sh"
 write_with_backup "$HOME/start-x11.sh" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 # Bring up the GUI stack:
-#   1. Make sure the Termux:X11 Android app is running (foreground its activity).
-#   2. Start a Termux-side X11 listener on :$DISPLAY_NUM (-ac = no auth).
-#   3. (Optional) start pulseaudio for sound.
-#   4. Start a socat bridge so VM/LXC clients (e.g. pubuntu in Podroid)
-#      can reach Termux:X11 directly over TCP — bypasses SSH X-forward
-#      and gives ~14x throughput. Bound ONLY to the AVF TAP interface
-#      so it's not exposed on Wi-Fi / Tailscale / etc.
-#      (See pixel/docs/pixel-desktop-architecture.md "Measured 2026-05-29".)
-#   5. Enter the proot Ubuntu rootfs and exec i3 (via .xinitrc).
+#   1. Foreground the Termux:X11 Android app (so the X server has a Surface).
+#   2. Set up xauth (cookie generated if missing). Start Termux:X11 with
+#      -auth pointing at ~/.Xauthority (or -ac if USE_XAUTH=0).
+#   3. Best-effort: deploy the cookie to pubuntu over SSH.
+#   4. Start pulseaudio (optional).
+#   5. Start a socat direct-X bridge so pubuntu / Alpine clients can hit
+#      Termux:X11 over TCP at ~110 MB/s instead of SSH X-forward's ~8 MB/s.
+#      Bound ONLY to the AVF TAP interface (not LAN/Tailscale/cellular).
+#      See pixel/docs/pixel-desktop-architecture.md "Measured 2026-05-29".
 #
 # Logs:
-#   /tmp/termux-x11.log     X server output
-#   /tmp/socat_x11.log      direct-X bridge log
-#   /tmp/proot-i3.log       i3 + apps output
+#   $PREFIX/tmp/termux-x11.log     X server output
+#   $PREFIX/tmp/socat_x11.log      direct-X bridge log
 #
 # Stop with:  bash ~/stop-x11.sh
 set -uo pipefail
-source ~/proot.env
+source ~/runtime.env
 LOG_DIR="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
 mkdir -p "$LOG_DIR"
 
@@ -151,8 +142,9 @@ fi
 
 # 2. X11 auth setup (idempotent — keeps existing cookie across restarts)
 #    USE_XAUTH=1 → run with magic-cookie auth (-auth ~/.Xauthority)
-#    USE_XAUTH=0 → run with no auth (-ac); only safe because socat is bound
-#                  to AVF TAP and that subnet is your own VMs only.
+#    USE_XAUTH=0 → run with no auth (-ac); only safe because the direct-X
+#                  bridge is bound to AVF TAP and that subnet is your own
+#                  VMs only.
 XAUTH_FILE="$HOME/.Xauthority"
 AVF_TAP_IP=$(ifconfig avf_tap_fixed 2>/dev/null | awk '/inet / {print $2}' | head -1)
 if [ "$USE_XAUTH" = "1" ]; then
@@ -189,8 +181,8 @@ else
     sleep 1
 fi
 
-# 2b. Sync cookie to pubuntu (best-effort) so the user doesn't have to.
-#     Quiet failure if pubuntu's SSH isn't reachable yet.
+# 3. Sync cookie to pubuntu (best-effort) so the user doesn't have to.
+#    Quiet failure if pubuntu's SSH isn't reachable yet.
 if [ "$USE_XAUTH" = "1" ] && [ -n "$AVF_TAP_IP" ] \
         && command -v nc >/dev/null 2>&1 && nc -z -w 2 localhost "$PUBUNTU_SSH_PORT" 2>/dev/null; then
     echo "[start-x11] deploying xauth cookie to pubuntu (best-effort)"
@@ -205,7 +197,7 @@ if [ "$USE_XAUTH" = "1" ] && [ -n "$AVF_TAP_IP" ] \
     fi
 fi
 
-# 3. pulseaudio (best-effort)
+# 4. pulseaudio (best-effort)
 if [ "$START_PULSE" = "1" ] && command -v pulseaudio >/dev/null 2>&1; then
     if ! pgrep -x pulseaudio >/dev/null 2>&1; then
         echo "[start-x11] starting pulseaudio"
@@ -213,11 +205,10 @@ if [ "$START_PULSE" = "1" ] && command -v pulseaudio >/dev/null 2>&1; then
     fi
 fi
 
-# 4. direct-X-over-TCP bridge (for pubuntu / Alpine to bypass slow ssh -Y)
+# 5. direct-X-over-TCP bridge (for pubuntu / Alpine to bypass slow ssh -Y)
 # Only useful when Podroid AVF VM is up (so the avf_tap_fixed interface exists).
 # Bind specifically to that interface so the port is reachable from inside
 # the VM only — NOT from LAN, Tailscale, cellular, or other Android apps.
-AVF_TAP_IP=$(ifconfig avf_tap_fixed 2>/dev/null | awk '/inet / {print $2}' | head -1)
 X_SOCK="$PREFIX/tmp/.X11-unix/X${DISPLAY_NUM}"
 if [ -n "$AVF_TAP_IP" ] && [ -S "$X_SOCK" ] && command -v socat >/dev/null 2>&1; then
     if pgrep -f "socat TCP-LISTEN:6000" >/dev/null 2>&1; then
@@ -236,19 +227,14 @@ elif ! command -v socat >/dev/null 2>&1; then
     echo "[start-x11] socat not installed — skipping direct-X bridge ('pkg install socat' to enable)"
 fi
 
-# 5. enter proot, run i3 via the user's ~/.xinitrc
-echo "[start-x11] launching i3 inside $PROOT_DISTRO as $PROOT_USER"
-echo "[start-x11] tail -f $LOG_DIR/proot-i3.log  for desktop logs"
-proot-distro login "$PROOT_DISTRO" --user "$PROOT_USER" --shared-tmp -- \
-    bash --login -c "export DISPLAY=:$DISPLAY_NUM; export PULSE_SERVER=tcp:127.0.0.1; exec ~/.xinitrc" \
-    >"$LOG_DIR/proot-i3.log" 2>&1 &
-disown $!
-
-echo "[start-x11] all started. Switch to the Termux:X11 app to see the desktop."
+echo
+echo "[start-x11] all started. Switch to the Termux:X11 app on the phone to see"
+echo "[start-x11] what's on the display. Launch GUI apps from any shell with"
+echo "[start-x11] DISPLAY=:0 (Termux-native) or DISPLAY=${AVF_TAP_IP:-<AVF_TAP_IP>}:0 (pubuntu)."
 EOF
 
-# ---- 3b. sync-x11-cookie.sh — push Termux's xauth cookie to pubuntu --------
-log "[3b/4] writing ~/sync-x11-cookie.sh"
+# ---- 3. sync-x11-cookie.sh — push Termux's xauth cookie to pubuntu ---------
+log "[3/4] writing ~/sync-x11-cookie.sh"
 write_with_backup "$HOME/sync-x11-cookie.sh" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 # Push Termux's xauth cookie (from ~/.Xauthority) into pubuntu's
@@ -268,7 +254,7 @@ write_with_backup "$HOME/sync-x11-cookie.sh" <<'EOF'
 #   PUBUNTU_SSH_USER     default: ryno
 #   DISPLAY_NUM          default: 0
 set -euo pipefail
-source ~/proot.env
+source ~/runtime.env
 PUBUNTU_SSH_HOST="${PUBUNTU_SSH_HOST:-localhost}"
 
 XAUTH_FILE="$HOME/.Xauthority"
@@ -306,30 +292,19 @@ write_with_backup "$HOME/stop-x11.sh" <<'EOF'
 # Tear down the GUI session. We DON'T stop the Termux:X11 Android
 # activity itself (cheap to leave running, faster restart next time).
 set -uo pipefail
-source ~/proot.env
+source ~/runtime.env
 
-# 1. tell i3 to exit cleanly (gives apps a chance to save state)
-echo "[stop-x11] asking i3 to exit"
-proot-distro login "$PROOT_DISTRO" --user "$PROOT_USER" --shared-tmp -- \
-    bash -c "export DISPLAY=:$DISPLAY_NUM; i3-msg exit" >/dev/null 2>&1 || true
-sleep 1
-
-# 2. kill anything still inside proot that's holding the display
-echo "[stop-x11] killing proot processes still on DISPLAY=:$DISPLAY_NUM"
-pkill -f "proot-distro login .* $PROOT_DISTRO" 2>/dev/null || true
-pkill -f "DISPLAY=:$DISPLAY_NUM" 2>/dev/null || true
-
-# 3. stop the direct-X bridge if it was running
+# 1. stop the direct-X bridge
 if pgrep -f "socat TCP-LISTEN:6000" >/dev/null 2>&1; then
     echo "[stop-x11] stopping direct-X bridge (socat on :6000)"
     pkill -f "socat TCP-LISTEN:6000" 2>/dev/null || true
 fi
 
-# 4. stop the X server
+# 2. stop the X server
 echo "[stop-x11] stopping Termux:X11 listener on :$DISPLAY_NUM"
 pkill -f "termux-x11 :$DISPLAY_NUM" 2>/dev/null || true
 
-# 5. (optional) stop pulseaudio
+# 3. (optional) stop pulseaudio
 if [ "$START_PULSE" = "1" ] && pgrep -x pulseaudio >/dev/null 2>&1; then
     pulseaudio -k 2>/dev/null || true
 fi
@@ -339,17 +314,20 @@ EOF
 
 log ""
 log "Deployed runtime scripts to \$HOME:"
-log "    ~/start-proot.sh        terminal-only shell into proot Ubuntu"
-log "    ~/start-x11.sh          bring up Termux:X11 + direct-X bridge + i3 desktop"
-log "    ~/stop-x11.sh           tear down the desktop"
-log "    ~/sync-x11-cookie.sh    (re)deploy xauth cookie to pubuntu when USE_XAUTH=1"
-log "    ~/proot.env             shared config (PROOT_DISTRO, PROOT_USER, USE_XAUTH, ...)"
+log "    ~/start-x11.sh          bring up Termux:X11 + xauth + cookie deploy + bridge"
+log "    ~/stop-x11.sh           tear down the display stack"
+log "    ~/sync-x11-cookie.sh    (re)deploy xauth cookie to pubuntu"
+log "    ~/runtime.env           shared config (DISPLAY_NUM, USE_XAUTH, ...)"
 log ""
 log "First-time GUI run:"
 log "    bash ~/start-x11.sh"
-log "    # then switch to the Termux:X11 app on the phone — i3 should appear"
+log "    # then open the Termux:X11 Android app to see the display"
+log "    # launch apps from a Termux shell or via ssh into pubuntu"
 log ""
 log "Useful Termux-X11 app settings (top-left hamburger menu):"
 log "    - 'Show additional keys'     keyboard helper bar (Tab, Ctrl, Esc, …)"
 log "    - 'Force fullscreen'         hides the Android nav bar"
 log "    - 'Pointer capture'          relative mouse for X (gaming/CAD)"
+log ""
+log "Old proot-based ~/proot.env, ~/start-proot.sh from earlier deploys are"
+log "obsolete — safe to delete manually."
