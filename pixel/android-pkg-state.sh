@@ -30,7 +30,13 @@ set -euo pipefail
 TRACKED=(
     "com.google.android.aicore|Gemini Nano on-device AI; ~3 GB when active, ~130 MB idle. Disable = no Magic Compose / Smart Reply / Now Brief."
     "com.google.android.tts|Google Text-to-Speech engine; ~130 MB. Disable = no TalkBack voice / Maps voice prompts."
-    # Add more here as needed, e.g.:
+    "com.google.android.googlequicksearchbox|Google app (hosts Assistant + Search bar + Discover feed). ~140-300 MB across processes. Disable = no 'Hey Google', no search widget, no left-swipe Discover. Chrome / Gmail / Lens-in-Camera unaffected."
+    "com.google.android.apps.tips|Pixel Tips notifications. ~119 MB. Pure marketing — always safe."
+    "com.google.android.apps.pixel.support|Pixel Get Help / support flows. ~135 MB across 2 processes. Disable = lose the in-OS support shortcut."
+    "com.google.android.apps.pixel.dcservice|Device Companion Service (Pixel Watch / Buds pairing). ~124 MB. Disabled because no Pixel Watch / Buds in this setup; re-enable if you pair one."
+    # Kept enabled deliberately (not in TRACKED so 'disable' without args won't touch them):
+    #   com.google.android.apps.pixel.creativeassistant  — Pixel Studio (used for AI image gen)
+    #   com.google.android.apps.pixel.agent              — Pixel Agent (on-device suggestions, Recorder summaries)
     # "com.facebook.katana|Facebook app; ~170 MB resident. Disable if you don't use it."
 )
 

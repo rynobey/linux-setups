@@ -28,6 +28,9 @@ PROOT_DISTRO="${PROOT_DISTRO:-ubuntu}"
 PROOT_USER="${PROOT_USER:-ryno}"
 DISPLAY_NUM="${DISPLAY_NUM:-0}"
 START_PULSE="${START_PULSE:-1}"
+USE_XAUTH="${USE_XAUTH:-0}"
+PUBUNTU_SSH_PORT="${PUBUNTU_SSH_PORT:-9923}"
+PUBUNTU_SSH_USER="${PUBUNTU_SSH_USER:-ryno}"
 
 log()  { printf '\033[1;34m[deploy-runtime]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
@@ -68,7 +71,7 @@ if dpkg -s vulkan-loader-generic >/dev/null 2>&1 \
     pkg uninstall -y vulkan-loader-generic >/dev/null 2>&1 || true
 fi
 
-TERMUX_PKGS="termux-x11-nightly mesa vulkan-loader-android mesa-vulkan-icd-swrast virglrenderer-android xorg-xrandr"
+TERMUX_PKGS="termux-x11-nightly mesa vulkan-loader-android mesa-vulkan-icd-swrast virglrenderer-android xorg-xrandr socat"
 [ "${START_PULSE:-1}" = "1" ]            && TERMUX_PKGS="$TERMUX_PKGS pulseaudio"
 [ "${INSTALL_TERMUX_FIREFOX:-0}" = "1" ] && TERMUX_PKGS="$TERMUX_PKGS firefox"
 
@@ -94,6 +97,13 @@ export PROOT_DISTRO="$PROOT_DISTRO"
 export PROOT_USER="$PROOT_USER"
 export DISPLAY_NUM="$DISPLAY_NUM"
 export START_PULSE="$START_PULSE"
+# X11 auth — set USE_XAUTH=1 to start Termux:X11 with magic-cookie auth
+# instead of -ac (no auth). Cookies are written to ~/.Xauthority and
+# auto-synced to pubuntu over SSH (best-effort) if reachable.
+# See pixel/docs/pixel-desktop-architecture.md (security section).
+export USE_XAUTH="$USE_XAUTH"
+export PUBUNTU_SSH_PORT="$PUBUNTU_SSH_PORT"
+export PUBUNTU_SSH_USER="$PUBUNTU_SSH_USER"
 EOF
 
 # ---- 2. start-proot.sh — terminal-only entry into the proot Linux env ------
@@ -116,10 +126,16 @@ write_with_backup "$HOME/start-x11.sh" <<'EOF'
 #   1. Make sure the Termux:X11 Android app is running (foreground its activity).
 #   2. Start a Termux-side X11 listener on :$DISPLAY_NUM (-ac = no auth).
 #   3. (Optional) start pulseaudio for sound.
-#   4. Enter the proot Ubuntu rootfs and exec i3 (via .xinitrc).
+#   4. Start a socat bridge so VM/LXC clients (e.g. pubuntu in Podroid)
+#      can reach Termux:X11 directly over TCP — bypasses SSH X-forward
+#      and gives ~14x throughput. Bound ONLY to the AVF TAP interface
+#      so it's not exposed on Wi-Fi / Tailscale / etc.
+#      (See pixel/docs/pixel-desktop-architecture.md "Measured 2026-05-29".)
+#   5. Enter the proot Ubuntu rootfs and exec i3 (via .xinitrc).
 #
 # Logs:
 #   /tmp/termux-x11.log     X server output
+#   /tmp/socat_x11.log      direct-X bridge log
 #   /tmp/proot-i3.log       i3 + apps output
 #
 # Stop with:  bash ~/stop-x11.sh
@@ -133,13 +149,60 @@ if command -v am >/dev/null 2>&1; then
     am start --user 0 -n com.termux.x11/.MainActivity >/dev/null 2>&1 || true
 fi
 
-# 2. start the X server (kill any old one on this display first)
+# 2. X11 auth setup (idempotent — keeps existing cookie across restarts)
+#    USE_XAUTH=1 → run with magic-cookie auth (-auth ~/.Xauthority)
+#    USE_XAUTH=0 → run with no auth (-ac); only safe because socat is bound
+#                  to AVF TAP and that subnet is your own VMs only.
+XAUTH_FILE="$HOME/.Xauthority"
+AVF_TAP_IP=$(ifconfig avf_tap_fixed 2>/dev/null | awk '/inet / {print $2}' | head -1)
+if [ "$USE_XAUTH" = "1" ]; then
+    if [ ! -s "$XAUTH_FILE" ] || ! xauth -f "$XAUTH_FILE" list 2>/dev/null \
+            | grep -q "MIT-MAGIC-COOKIE-1"; then
+        echo "[start-x11] generating new xauth cookie → $XAUTH_FILE"
+        COOKIE=$(openssl rand -hex 16 2>/dev/null || \
+                 dd if=/dev/urandom bs=16 count=1 2>/dev/null | xxd -p -c 32)
+        rm -f "$XAUTH_FILE"
+        touch "$XAUTH_FILE"
+        chmod 600 "$XAUTH_FILE"
+        # Add an entry per address the X server can be reached at:
+        # - local Unix socket (Termux processes)
+        # - AVF TAP IP (pubuntu/Alpine connecting via socat)
+        xauth -f "$XAUTH_FILE" add ":$DISPLAY_NUM"          . "$COOKIE"
+        if [ -n "$AVF_TAP_IP" ]; then
+            xauth -f "$XAUTH_FILE" add "$AVF_TAP_IP:$DISPLAY_NUM" . "$COOKIE"
+        fi
+    else
+        echo "[start-x11] reusing existing xauth cookie in $XAUTH_FILE"
+    fi
+    X11_AUTH_FLAGS="-auth $XAUTH_FILE"
+else
+    X11_AUTH_FLAGS="-ac"
+fi
+
+# Start the X server (kill any old one on this display first)
 if pgrep -f "termux-x11 :$DISPLAY_NUM" >/dev/null 2>&1; then
     echo "[start-x11] X server already running on :$DISPLAY_NUM"
 else
-    echo "[start-x11] starting Termux:X11 on :$DISPLAY_NUM"
-    nohup termux-x11 ":$DISPLAY_NUM" -ac >"$LOG_DIR/termux-x11.log" 2>&1 &
+    echo "[start-x11] starting Termux:X11 on :$DISPLAY_NUM ($X11_AUTH_FLAGS)"
+    nohup termux-x11 ":$DISPLAY_NUM" $X11_AUTH_FLAGS \
+        >"$LOG_DIR/termux-x11.log" 2>&1 &
     sleep 1
+fi
+
+# 2b. Sync cookie to pubuntu (best-effort) so the user doesn't have to.
+#     Quiet failure if pubuntu's SSH isn't reachable yet.
+if [ "$USE_XAUTH" = "1" ] && [ -n "$AVF_TAP_IP" ] \
+        && command -v nc >/dev/null 2>&1 && nc -z -w 2 localhost "$PUBUNTU_SSH_PORT" 2>/dev/null; then
+    echo "[start-x11] deploying xauth cookie to pubuntu (best-effort)"
+    if xauth -f "$XAUTH_FILE" extract - "$AVF_TAP_IP:$DISPLAY_NUM" 2>/dev/null \
+            | ssh -p "$PUBUNTU_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=3 \
+                  "${PUBUNTU_SSH_USER}@localhost" \
+                  "touch ~/.Xauthority; chmod 600 ~/.Xauthority; xauth -f ~/.Xauthority merge -" \
+            2>/dev/null; then
+        echo "[start-x11]   cookie deployed to pubuntu's ~/.Xauthority"
+    else
+        echo "[start-x11]   couldn't reach pubuntu over SSH (run ~/sync-x11-cookie.sh manually later)"
+    fi
 fi
 
 # 3. pulseaudio (best-effort)
@@ -150,7 +213,30 @@ if [ "$START_PULSE" = "1" ] && command -v pulseaudio >/dev/null 2>&1; then
     fi
 fi
 
-# 4. enter proot, run i3 via the user's ~/.xinitrc
+# 4. direct-X-over-TCP bridge (for pubuntu / Alpine to bypass slow ssh -Y)
+# Only useful when Podroid AVF VM is up (so the avf_tap_fixed interface exists).
+# Bind specifically to that interface so the port is reachable from inside
+# the VM only — NOT from LAN, Tailscale, cellular, or other Android apps.
+AVF_TAP_IP=$(ifconfig avf_tap_fixed 2>/dev/null | awk '/inet / {print $2}' | head -1)
+X_SOCK="$PREFIX/tmp/.X11-unix/X${DISPLAY_NUM}"
+if [ -n "$AVF_TAP_IP" ] && [ -S "$X_SOCK" ] && command -v socat >/dev/null 2>&1; then
+    if pgrep -f "socat TCP-LISTEN:6000" >/dev/null 2>&1; then
+        echo "[start-x11] direct-X bridge already running on $AVF_TAP_IP:6000"
+    else
+        echo "[start-x11] starting direct-X bridge on $AVF_TAP_IP:6000 → $X_SOCK"
+        nohup socat TCP-LISTEN:6000,fork,reuseaddr,bind=$AVF_TAP_IP \
+                    UNIX-CONNECT:$X_SOCK \
+            </dev/null >>"$LOG_DIR/socat_x11.log" 2>&1 &
+        disown $!
+        echo "[start-x11]   from pubuntu/Alpine, set:  export DISPLAY=$AVF_TAP_IP:0"
+    fi
+elif [ -z "$AVF_TAP_IP" ]; then
+    echo "[start-x11] no avf_tap_fixed interface (Podroid VM not running) — skipping direct-X bridge"
+elif ! command -v socat >/dev/null 2>&1; then
+    echo "[start-x11] socat not installed — skipping direct-X bridge ('pkg install socat' to enable)"
+fi
+
+# 5. enter proot, run i3 via the user's ~/.xinitrc
 echo "[start-x11] launching i3 inside $PROOT_DISTRO as $PROOT_USER"
 echo "[start-x11] tail -f $LOG_DIR/proot-i3.log  for desktop logs"
 proot-distro login "$PROOT_DISTRO" --user "$PROOT_USER" --shared-tmp -- \
@@ -159,6 +245,58 @@ proot-distro login "$PROOT_DISTRO" --user "$PROOT_USER" --shared-tmp -- \
 disown $!
 
 echo "[start-x11] all started. Switch to the Termux:X11 app to see the desktop."
+EOF
+
+# ---- 3b. sync-x11-cookie.sh — push Termux's xauth cookie to pubuntu --------
+log "[3b/4] writing ~/sync-x11-cookie.sh"
+write_with_backup "$HOME/sync-x11-cookie.sh" <<'EOF'
+#!/data/data/com.termux/files/usr/bin/bash
+# Push Termux's xauth cookie (from ~/.Xauthority) into pubuntu's
+# ~/.Xauthority so pubuntu X clients authenticate against Termux:X11
+# without -ac being set on the X server.
+#
+# Run after start-x11.sh has generated a cookie (USE_XAUTH=1). The
+# auto-deploy in start-x11.sh tries this on every start; this script
+# is for when:
+#   - pubuntu wasn't reachable at start-x11 time
+#   - you rebuilt pubuntu and need to push the cookie again
+#   - you rotated the cookie (rm ~/.Xauthority then re-run start-x11.sh)
+#
+# Env:
+#   PUBUNTU_SSH_HOST     default: localhost  (Podroid forward to pubuntu)
+#   PUBUNTU_SSH_PORT     default: 9923
+#   PUBUNTU_SSH_USER     default: ryno
+#   DISPLAY_NUM          default: 0
+set -euo pipefail
+source ~/proot.env
+PUBUNTU_SSH_HOST="${PUBUNTU_SSH_HOST:-localhost}"
+
+XAUTH_FILE="$HOME/.Xauthority"
+if [ ! -s "$XAUTH_FILE" ]; then
+    echo "[sync-x11-cookie] $XAUTH_FILE is empty/missing — run start-x11.sh with USE_XAUTH=1 first" >&2
+    exit 1
+fi
+
+AVF_TAP_IP=$(ifconfig avf_tap_fixed 2>/dev/null | awk '/inet / {print $2}' | head -1)
+if [ -z "$AVF_TAP_IP" ]; then
+    echo "[sync-x11-cookie] avf_tap_fixed interface not present — is Podroid running?" >&2
+    exit 1
+fi
+
+ENTRY="$AVF_TAP_IP:$DISPLAY_NUM"
+if ! xauth -f "$XAUTH_FILE" list "$ENTRY" 2>/dev/null | grep -q "MIT-MAGIC-COOKIE-1"; then
+    echo "[sync-x11-cookie] no cookie for $ENTRY in $XAUTH_FILE" >&2
+    echo "[sync-x11-cookie] start-x11.sh with USE_XAUTH=1 should have created one" >&2
+    exit 1
+fi
+
+echo "[sync-x11-cookie] pushing $ENTRY cookie → ${PUBUNTU_SSH_USER}@${PUBUNTU_SSH_HOST}:${PUBUNTU_SSH_PORT}"
+xauth -f "$XAUTH_FILE" extract - "$ENTRY" \
+    | ssh -p "$PUBUNTU_SSH_PORT" -o ConnectTimeout=5 \
+          "${PUBUNTU_SSH_USER}@${PUBUNTU_SSH_HOST}" \
+          'touch ~/.Xauthority; chmod 600 ~/.Xauthority; xauth -f ~/.Xauthority merge -'
+echo "[sync-x11-cookie] done. Verify in pubuntu with:"
+echo "    ssh -p $PUBUNTU_SSH_PORT $PUBUNTU_SSH_USER@$PUBUNTU_SSH_HOST 'DISPLAY=$ENTRY xset q' | head -3"
 EOF
 
 # ---- 4. stop-x11.sh --------------------------------------------------------
@@ -181,11 +319,17 @@ echo "[stop-x11] killing proot processes still on DISPLAY=:$DISPLAY_NUM"
 pkill -f "proot-distro login .* $PROOT_DISTRO" 2>/dev/null || true
 pkill -f "DISPLAY=:$DISPLAY_NUM" 2>/dev/null || true
 
-# 3. stop the X server
+# 3. stop the direct-X bridge if it was running
+if pgrep -f "socat TCP-LISTEN:6000" >/dev/null 2>&1; then
+    echo "[stop-x11] stopping direct-X bridge (socat on :6000)"
+    pkill -f "socat TCP-LISTEN:6000" 2>/dev/null || true
+fi
+
+# 4. stop the X server
 echo "[stop-x11] stopping Termux:X11 listener on :$DISPLAY_NUM"
 pkill -f "termux-x11 :$DISPLAY_NUM" 2>/dev/null || true
 
-# 4. (optional) stop pulseaudio
+# 5. (optional) stop pulseaudio
 if [ "$START_PULSE" = "1" ] && pgrep -x pulseaudio >/dev/null 2>&1; then
     pulseaudio -k 2>/dev/null || true
 fi
@@ -195,10 +339,11 @@ EOF
 
 log ""
 log "Deployed runtime scripts to \$HOME:"
-log "    ~/start-proot.sh    terminal-only shell into proot Ubuntu"
-log "    ~/start-x11.sh      bring up Termux:X11 + i3 desktop"
-log "    ~/stop-x11.sh       tear down the desktop"
-log "    ~/proot.env         shared config (PROOT_DISTRO, PROOT_USER, etc.)"
+log "    ~/start-proot.sh        terminal-only shell into proot Ubuntu"
+log "    ~/start-x11.sh          bring up Termux:X11 + direct-X bridge + i3 desktop"
+log "    ~/stop-x11.sh           tear down the desktop"
+log "    ~/sync-x11-cookie.sh    (re)deploy xauth cookie to pubuntu when USE_XAUTH=1"
+log "    ~/proot.env             shared config (PROOT_DISTRO, PROOT_USER, USE_XAUTH, ...)"
 log ""
 log "First-time GUI run:"
 log "    bash ~/start-x11.sh"
