@@ -131,9 +131,28 @@ for pkg in com.excp.podroid com.excp.podroid.debug; do
     fi
 done
 
+# ---- 4. deviceidle whitelist (Doze-kill prevention overnight) -------------
+# Without this, Android's Doze evicts the cached Podroid app while the phone
+# sits idle overnight — taking the VM with it. The whitelist tells Doze to
+# leave the app alone even under battery saver. Same mechanism VPN apps,
+# alarm clocks, etc. use to survive idle periods.
+#
+# Idempotent: `dumpsys deviceidle whitelist +PKG` is a no-op if already
+# listed. Does NOT survive `pm clear`, factory reset, or some Android
+# upgrades — those are typically what put us back in the original failure
+# mode.
+log "[4/4] adding Podroid packages to deviceidle whitelist"
+for pkg in com.excp.podroid com.excp.podroid.debug; do
+    if pkg_exists "$pkg"; then
+        adb shell "dumpsys deviceidle whitelist +$pkg" >/dev/null 2>&1
+        log "       + $pkg"
+    fi
+done
+
 # ---- done ------------------------------------------------------------------
 log ""
 log "all done. To apply: restart the VM in Podroid (Settings/Stop,"
 log "then Start). Verify with:"
 log "  adb shell appops get com.excp.podroid.debug MANAGE_EXTERNAL_STORAGE"
 log "  adb shell settings get global settings_enable_monitor_phantom_procs"
+log "  adb shell dumpsys deviceidle whitelist | grep podroid"
