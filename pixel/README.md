@@ -28,6 +28,8 @@ pixel/
 │   ├── 06-bootstrap-ssh-lxc.sh     # Just SSH bootstrap (key gen + sshd + pubkeys)
 │   ├── 07-bootstrap-deps-lxc.sh    # Just deps (Docker, toolchains, sesh, Node)
 │   ├── 08-install-tailscale-lxc.sh # Just Tailscale install + auth
+│   ├── 09-backup-podroid-vm.sh     # Whole-VM image backup (storage.img, VM stopped)
+│   ├── 10-restore-podroid-vm.sh    # Whole-VM image restore
 │   └── helper/
 │       ├── alpine-run.sh           # Stream a script to Alpine via SSH
 │       ├── lxc-run.sh              # Stream a script to pubuntu via SSH + lxc-attach
@@ -90,6 +92,8 @@ These work identically from either context. Prerequisites:
 | **f.** Deps bootstrap on LXC | `bash client/07-bootstrap-deps-lxc.sh` |
 | **g.** Tailscale install + up | `bash client/08-install-tailscale-lxc.sh` |
 | **h.** Additional ADB settings post pair+connect | `bash client/02-adb-settings.sh` |
+| **i.** Whole-VM image backup (VM stopped, debug APK only) | `bash client/09-backup-podroid-vm.sh` |
+| **j.** Whole-VM image restore | `bash client/10-restore-podroid-vm.sh` |
 
 Each script auto-detects the username (via `/etc/podroid-last-user` written
 by `create-user.sh`), so steps **e**, **f**, **g** can be re-run without
