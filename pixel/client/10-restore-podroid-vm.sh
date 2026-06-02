@@ -66,17 +66,17 @@ log "restoring from $BACKUP ($(du -h "$BACKUP" | awk '{print $1}'))"
 
 # Decrypt/decompress pipeline from the file extension.
 case "$BACKUP" in
-    *.tar.zst.age|*.tar.zst) DECOMPRESS=(zstd -dc) ;;
-    *.tar.gz.age|*.tar.gz)   DECOMPRESS=(gzip -dc) ;;
-    *) err "unrecognized extension (expected .tar.zst[.age] or .tar.gz[.age])"; exit 1 ;;
+    *.tar.zst.gpg|*.tar.zst) DECOMPRESS=(zstd -dc) ;;
+    *.tar.gz.gpg|*.tar.gz)   DECOMPRESS=(gzip -dc) ;;
+    *) err "unrecognized extension (expected .tar.zst[.gpg] or .tar.gz[.gpg])"; exit 1 ;;
 esac
 ENCRYPTED=0
-case "$BACKUP" in *.age) ENCRYPTED=1 ;; esac
+case "$BACKUP" in *.gpg) ENCRYPTED=1 ;; esac
 if [ "${DECOMPRESS[0]}" = zstd ] && ! command -v zstd >/dev/null 2>&1; then
     err "zstd not found (pkg/apt install zstd)"; exit 1
 fi
-if [ "$ENCRYPTED" -eq 1 ] && ! command -v age >/dev/null 2>&1; then
-    err "age not found (pkg/apt install age)"; exit 1
+if [ "$ENCRYPTED" -eq 1 ] && ! command -v gpg >/dev/null 2>&1; then
+    err "gpg not found (pkg/apt install gnupg)"; exit 1
 fi
 
 # ---- ADB + package preflight ------------------------------------------------
@@ -103,15 +103,32 @@ log "force-stopping $PKG (so DataStore can't clobber the restored settings)"
 adb shell am force-stop "$PKG"
 
 # ---- stream the restore -----------------------------------------------------
-# exec-in forwards stdin raw (no pty mangling); tar -xS re-punches holes.
+# Passphrase is collected BEFORE the pipeline starts (gpg loopback
+# pinentry), so the prompt never fights pv's progress bar and the
+# restore runs unattended once it begins.
+if [ "$ENCRYPTED" -eq 1 ]; then
+    read -rs -p "backup passphrase: " PASSPHRASE < /dev/tty; echo
+fi
+gpg_unseal() { gpg --batch --quiet --pinentry-mode loopback --passphrase-fd 3 \
+                   -d "$1" 3< <(printf '%s' "$PASSPHRASE"); }
+
+# pv reads the compressed file (size known → accurate % + ETA).
+# `adb shell -T` (not exec-in): the v2 shell protocol forwards stdin raw
+# AND propagates the device-side exit code, so a failed extraction fails
+# the pipeline loudly. tar -xS re-punches the sparse holes.
+PV=(cat)
+if command -v pv >/dev/null 2>&1; then
+    PV=(pv -s "$(stat -c %s "$BACKUP")")
+else
+    warn "pv not found — no progress bar. pkg/apt install pv to get one."
+fi
 log "streaming restore (this is the slow part — ~real-data size over ADB)"
 if [ "$ENCRYPTED" -eq 1 ]; then
-    log "enter the backup's age passphrase"
-    age -d "$BACKUP" | "${DECOMPRESS[@]}" \
-        | adb exec-in run-as "$PKG" tar -xSf - -C files
+    "${PV[@]}" "$BACKUP" | gpg_unseal /dev/stdin | "${DECOMPRESS[@]}" \
+        | adb shell -T run-as "$PKG" tar -xSf - -C files
 else
-    "${DECOMPRESS[@]}" "$BACKUP" \
-        | adb exec-in run-as "$PKG" tar -xSf - -C files
+    "${PV[@]}" "$BACKUP" | "${DECOMPRESS[@]}" \
+        | adb shell -T run-as "$PKG" tar -xSf - -C files
 fi
 
 # ---- verify -----------------------------------------------------------------

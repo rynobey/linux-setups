@@ -27,13 +27,14 @@
 #   - zstd on this client (pkg/apt install zstd); falls back to gzip.
 #
 # Flags:
-#   --plain          unencrypted backup (default encrypts with age -p)
+#   --plain          unencrypted backup (default encrypts with gpg AES256)
 #   --local <dir>    output dir (default: ~/recovery-bundle on Termux,
 #                                          ~/podroid-backups elsewhere)
 #   --pkg <pkg>      app package (default: com.excp.podroid.debug)
 #   --list           show existing VM backups in the local dir
 #
-# Encrypted backups prompt for an age passphrase. Save it to your
+# The passphrase is collected ONCE before any data moves; the transfer
+# and the end-to-end verification then run unattended. Save it to your
 # password manager IMMEDIATELY — without it the backup is unrecoverable.
 #
 # Restore with: 10-restore-podroid-vm.sh
@@ -106,13 +107,34 @@ if adb shell dumpsys activity services "$PKG" 2>/dev/null | grep -q ServiceRecor
     exit 1
 fi
 
+# ---- Phantom Process Killer preflight ----------------------------------------
+# The device-side `run-as <pkg> tar` runs under Podroid's UID — to Android
+# that's a "phantom process" of a not-running app doing minutes of heavy
+# I/O, a prime PPK kill target. A mid-stream kill produces a silently
+# truncated backup (observed: 1.8 GiB of an 11.5 GiB stream). PPK settings
+# also re-sync from Google's Phenotype service unless sync is disabled —
+# so check every time, don't assume 02-adb-settings.sh from last month
+# still holds.
+ppk=$(adb shell settings get global settings_enable_monitor_phantom_procs | tr -d '\r')
+if [ "$ppk" != "false" ]; then
+    err "Phantom Process Killer monitoring is ACTIVE (settings_enable_monitor_phantom_procs=$ppk)."
+    err "It can kill the device-side tar mid-stream → silently truncated backup."
+    err "Re-apply the PPK disable first:"
+    err "  bash $LSDIR/pixel/client/02-adb-settings.sh"
+    exit 1
+fi
+
 # ---- encryption / compression tooling ---------------------------------------
-if [ "$ENCRYPT" -eq 1 ] && ! command -v age >/dev/null 2>&1; then
+# gpg symmetric (not age, unlike the repo's other backups): age refuses a
+# passphrase from anywhere but the tty, which fights pv's progress bar and
+# forces a SECOND prompt for the verification pass. gpg's loopback pinentry
+# lets us collect the passphrase ONCE, up front, before any data moves.
+if [ "$ENCRYPT" -eq 1 ] && ! command -v gpg >/dev/null 2>&1; then
     if [ -n "${PREFIX:-}" ] && [ -x "${PREFIX}/bin/pkg" ]; then
-        log "installing age (pkg install age)"
-        pkg install -y age
+        log "installing gnupg (pkg install gnupg)"
+        pkg install -y gnupg
     else
-        err "age not found (apt install age), or re-run with --plain"
+        err "gpg not found (apt install gnupg), or re-run with --plain"
         exit 1
     fi
 fi
@@ -126,36 +148,93 @@ else
     EXT="tar.gz"
 fi
 
+# Expected stream size = the image's real/allocated data (what sparse tar
+# streams). Used for the pv progress bar AND the post-backup verification.
+src_kb=$(adb shell run-as "$PKG" du -sk files/storage.img files/datastore \
+    | awk '{s+=$1} END{print s}' | tr -d '\r')
+expected_bytes=$(( src_kb * 1024 ))
+
+# Progress bar: pv sits between adb and the compressor so it can show
+# % + ETA, not just a counter.
+PV=(cat)
+if command -v pv >/dev/null 2>&1; then
+    PV=(pv -s "$expected_bytes")
+else
+    warn "pv not found — no progress bar. pkg/apt install pv to get one."
+fi
+
+# ---- collect the passphrase BEFORE anything moves ----------------------------
+# One prompt pair, then the pipeline and the verification both run
+# unattended — start the backup, walk away.
+gpg_seal()   { gpg --batch --yes --pinentry-mode loopback --passphrase-fd 3 \
+                   --symmetric --cipher-algo AES256 -o "$1" 3< <(printf '%s' "$PASSPHRASE"); }
+gpg_unseal() { gpg --batch --quiet --pinentry-mode loopback --passphrase-fd 3 \
+                   -d "$1" 3< <(printf '%s' "$PASSPHRASE"); }
+if [ "$ENCRYPT" -eq 1 ]; then
+    log "choose a backup passphrase — save it to your password manager NOW;"
+    log "without it the backup is unrecoverable"
+    while :; do
+        read -rs -p "  passphrase: " PASSPHRASE < /dev/tty; echo
+        read -rs -p "  confirm:    " confirm < /dev/tty; echo
+        if [ -z "$PASSPHRASE" ]; then warn "empty passphrase — try again"
+        elif [ "$PASSPHRASE" != "$confirm" ]; then warn "mismatch — try again"
+        else break; fi
+    done
+    unset confirm
+fi
+
 # ---- backup -----------------------------------------------------------------
 mkdir -p "$LOCAL_DIR"
 real_size=$(adb shell run-as "$PKG" du -h files/storage.img | awk '{print $1}')
 stamp="$(date +%F-%H%M)"
 out="$LOCAL_DIR/podroid-vm-${stamp}.${EXT}"
-[ "$ENCRYPT" -eq 1 ] && out="${out}.age"
+[ "$ENCRYPT" -eq 1 ] && out="${out}.gpg"
 
 log "streaming storage.img (${real_size} real data) + datastore from $PKG"
 log "→ $out"
+# `adb shell -T` (not exec-out): the v2 shell protocol keeps stdout
+# binary-safe AND propagates the device-side exit code, so a tar that
+# dies mid-stream fails the pipeline instead of sealing a truncated
+# backup. exec-out's raw exec service always exits 0 locally.
+#
+# `< /dev/null` matters: adb shell forwards local stdin to the remote,
+# which would otherwise eat keyboard input meant for the terminal.
 if [ "$ENCRYPT" -eq 1 ]; then
-    log "you'll be prompted for a passphrase — remember it; restore needs the same one"
-    adb exec-out run-as "$PKG" tar -cS -C files storage.img datastore \
-        | "${COMPRESS[@]}" | age -p -o "$out"
+    adb shell -T run-as "$PKG" tar -cS -C files storage.img datastore </dev/null \
+        | "${PV[@]}" | "${COMPRESS[@]}" | gpg_seal "$out"
     chmod 600 "$out"
-
-    # Test-decrypt so a typo'd passphrase surfaces NOW, not at restore time.
-    log ""
-    log "verifying $out decrypts — enter the SAME passphrase ONCE MORE"
-    if age -d "$out" > /dev/null; then
-        log "✓ passphrase verified — backup is recoverable"
-    else
-        err "✗ DECRYPT TEST FAILED — passphrase doesn't match this file."
-        err "  Recreate the backup."
-        exit 1
-    fi
 else
     log "(UNENCRYPTED — contains everything inside your VM)"
-    adb exec-out run-as "$PKG" tar -cS -C files storage.img datastore \
-        | "${COMPRESS[@]}" > "$out"
+    adb shell -T run-as "$PKG" tar -cS -C files storage.img datastore </dev/null \
+        | "${PV[@]}" | "${COMPRESS[@]}" > "$out"
 fi
+
+# ---- end-to-end verification ------------------------------------------------
+# Decrypt + decompress the sealed file and count the inner tar stream's
+# bytes against the expected size. This catches the failure no pipeline
+# exit code can: Android reaping the device-side tar mid-stream (phantom-
+# process / memory-pressure kills), which seals an internally-consistent
+# but truncated archive. Runs unattended (passphrase already in hand).
+case "$EXT" in
+    tar.zst) DECOMP=(zstd -dc) ;;
+    tar.gz)  DECOMP=(gzip -dc) ;;
+esac
+log ""
+log "verifying backup end-to-end"
+if [ "$ENCRYPT" -eq 1 ]; then
+    inner_bytes=$(gpg_unseal "$out" | "${DECOMP[@]}" | wc -c)
+else
+    inner_bytes=$("${DECOMP[@]}" "$out" | wc -c)
+fi
+# tar overhead means inner ≥ source data; well below it = truncation.
+if [ "$inner_bytes" -lt $(( expected_bytes * 95 / 100 )) ]; then
+    err "✗ VERIFICATION FAILED: inner stream is $inner_bytes bytes,"
+    err "  expected ≥ $expected_bytes. The backup is TRUNCATED — the"
+    err "  device-side tar was likely killed mid-stream (phantom-process /"
+    err "  memory-pressure kill). Delete this file and re-run."
+    exit 1
+fi
+log "✓ verified — inner stream $inner_bytes bytes (expected ~$expected_bytes)"
 
 log "done — $(du -h "$out" | awk '{print $1}')"
 log ""
