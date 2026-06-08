@@ -9,11 +9,18 @@ state persists across reboots; re-enable with one command.
 | Package | Why | Memory freed | Re-enable command |
 |---|---|---|---|
 | `com.google.android.aicore` | Holds 3.8 GB Tensor model weights when active. Idle ~130 MB. Inference is what triggered LMK kills of Podroid. | ~3.5 GB available, ~3 GB free | `adb shell pm enable com.google.android.aicore` |
-| `com.google.android.tts` | Google Text-to-Speech engine. Not used in our setup. | ~135 MB available | `adb shell pm enable com.google.android.tts` |
-| `com.google.android.googlequicksearchbox` | Google app — hosts Assistant + search bar + Discover. Not used in Linux-host workflow. | ~140-300 MB across `:interactor`, `:search` etc. | `adb shell pm enable com.google.android.googlequicksearchbox` |
 | `com.google.android.apps.tips` | Pixel Tips notifications. Pure marketing. | ~119 MB | `adb shell pm enable com.google.android.apps.tips` |
 | `com.google.android.apps.pixel.support` | Pixel Get Help / support shortcuts. | ~135 MB across 2 processes | `adb shell pm enable com.google.android.apps.pixel.support` |
 | `com.google.android.apps.pixel.dcservice` | Device Companion Service (Pixel Watch / Buds pairing). Not used. | ~124 MB | `adb shell pm enable com.google.android.apps.pixel.dcservice` |
+
+## Re-enabled — required by Android Auto
+
+These were disabled for memory but **Android Auto (`com.google.android.projection.gearhead`) depends on them**, so they're re-enabled. Disabling them breaks Android Auto (the Google app is a hard requirement; TTS provides navigation voice). Re-disable them only when you're not using Android Auto and need the VM headroom.
+
+| Package | Why AA needs it | Memory cost | Re-disable command |
+|---|---|---|---|
+| `com.google.android.googlequicksearchbox` | Google app / Assistant — Android Auto refuses to run / crashes without it. | ~140-300 MB across `:interactor`, `:search` etc. | `adb shell pm disable-user --user 0 com.google.android.googlequicksearchbox` |
+| `com.google.android.tts` | Google TTS — Android Auto navigation voice prompts. | ~135 MB | `adb shell pm disable-user --user 0 com.google.android.tts` |
 
 ## Deliberately kept enabled (notes for future reference)
 

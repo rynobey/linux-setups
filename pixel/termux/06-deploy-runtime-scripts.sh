@@ -180,10 +180,13 @@ export PUBUNTU_SSH_USER="$PUBUNTU_SSH_USER"
 
 # virgl — Mesa's virpipe driver talks to virgl_test_server_android, which
 # loads Android's PowerVR GLES blob → hardware-accelerated GL for Termux
-# clients. Without these exports Mesa silently falls back to llvmpipe
-# (software). Benchmarks earlier picked virgl over llvmpipe for
-# consistency on hard scenes — see project_pixel10_proot_overhead_dominates.
-# start-x11.sh ensures the daemon is running on this socket.
+# clients. This export is now LOAD-BEARING: as of Mesa 26.0.6 (2026-06),
+# with NO gallium driver selected libgallium abort()s during GL-context
+# init, so *every* GL/GTK app (xfce4-terminal, firefox, …) crashes on
+# launch — it no longer silently falls back to llvmpipe. Set it explicitly
+# (virpipe = HW via virgl; llvmpipe = software). Diagnose app crashes with
+# `adb logcat -b crash` (tombstone names the bad .so). start-x11.sh ensures
+# the daemon is running on this socket and pins this driver as a fallback.
 export GALLIUM_DRIVER=virpipe
 export LIBGL_ALWAYS_SOFTWARE=0
 export VTEST_SOCKET_NAME="\$PREFIX/tmp/virgl_test.sock"
@@ -1175,6 +1178,11 @@ write_with_backup "$HOME/start-x11.sh" <<'EOF'
 # Stop with:  bash ~/stop-x11.sh
 set -uo pipefail
 source ~/runtime.env
+# Mesa 26.0.6+ aborts in libgallium during GL-context init when no driver is
+# selected (every GTK/GL app crashes on launch). runtime.env exports this, but
+# pin it here too so a stale/partial runtime.env can't leave GL clients to crash.
+: "${GALLIUM_DRIVER:=virpipe}"
+export GALLIUM_DRIVER
 LOG_DIR="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
 mkdir -p "$LOG_DIR"
 

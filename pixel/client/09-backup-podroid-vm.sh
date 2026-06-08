@@ -148,11 +148,16 @@ else
     EXT="tar.gz"
 fi
 
-# Expected stream size = the image's real/allocated data (what sparse tar
-# streams). Used for the pv progress bar AND the post-backup verification.
+# Expected stream size ≈ the image's allocated data — feeds the pv progress
+# bar. NOTE: tar streams somewhat LESS than this (it hole-skips allocated-
+# but-zero blocks, e.g. lazy inode tables), so the bar tops out around
+# 90-95%, not 100. That's normal. Verification is structural, not size-based.
 src_kb=$(adb shell run-as "$PKG" du -sk files/storage.img files/datastore \
     | awk '{s+=$1} END{print s}' | tr -d '\r')
 expected_bytes=$(( src_kb * 1024 ))
+# Apparent size of the image — the tar header must carry this exactly;
+# it's also what the app's size check demands on restore.
+img_bytes=$(adb shell run-as "$PKG" stat -c %s files/storage.img | tr -d '\r')
 
 # Progress bar: pv sits between adb and the compressor so it can show
 # % + ETA, not just a counter.
@@ -210,31 +215,41 @@ else
 fi
 
 # ---- end-to-end verification ------------------------------------------------
-# Decrypt + decompress the sealed file and count the inner tar stream's
-# bytes against the expected size. This catches the failure no pipeline
-# exit code can: Android reaping the device-side tar mid-stream (phantom-
-# process / memory-pressure kills), which seals an internally-consistent
-# but truncated archive. Runs unattended (passphrase already in hand).
+# Decrypt + decompress the sealed file and PARSE the inner tar to its
+# end-of-archive marker. A stream truncated by Android reaping the
+# device-side tar (phantom-process / memory-pressure kills) fails the
+# parse with "unexpected EOF"; a complete one lists every member. We
+# additionally assert storage.img carries its full apparent size — the
+# exact length the app's size check demands on restore. Byte-count
+# comparison against du is deliberately NOT used: tar legitimately
+# hole-skips allocated-but-zero blocks, so streamed size < du size on
+# every healthy backup. Runs unattended (passphrase already in hand).
 case "$EXT" in
     tar.zst) DECOMP=(zstd -dc) ;;
     tar.gz)  DECOMP=(gzip -dc) ;;
 esac
 log ""
-log "verifying backup end-to-end"
+log "verifying backup end-to-end (structural tar parse)"
+vfail=0
 if [ "$ENCRYPT" -eq 1 ]; then
-    inner_bytes=$(gpg_unseal "$out" | "${DECOMP[@]}" | wc -c)
+    listing=$(gpg_unseal "$out" | "${DECOMP[@]}" | tar -tvf -) || vfail=$?
 else
-    inner_bytes=$("${DECOMP[@]}" "$out" | wc -c)
+    listing=$("${DECOMP[@]}" "$out" | tar -tvf -) || vfail=$?
 fi
-# tar overhead means inner ≥ source data; well below it = truncation.
-if [ "$inner_bytes" -lt $(( expected_bytes * 95 / 100 )) ]; then
-    err "✗ VERIFICATION FAILED: inner stream is $inner_bytes bytes,"
-    err "  expected ≥ $expected_bytes. The backup is TRUNCATED — the"
-    err "  device-side tar was likely killed mid-stream (phantom-process /"
-    err "  memory-pressure kill). Delete this file and re-run."
+if [ "$vfail" -ne 0 ]; then
+    err "✗ VERIFICATION FAILED: the inner tar stream doesn't parse to its"
+    err "  end-of-archive marker — the backup is TRUNCATED (device-side tar"
+    err "  was likely killed mid-stream). Delete this file and re-run."
     exit 1
 fi
-log "✓ verified — inner stream $inner_bytes bytes (expected ~$expected_bytes)"
+if ! printf '%s\n' "$listing" | grep -q "storage\.img" \
+   || ! printf '%s\n' "$listing" | grep -q "[^0-9]${img_bytes}[^0-9]"; then
+    err "✗ VERIFICATION FAILED: storage.img missing or wrong apparent size."
+    err "  Expected ${img_bytes} bytes. Archive listing:"
+    printf '%s\n' "$listing" >&2
+    exit 1
+fi
+log "✓ verified — archive parses cleanly, storage.img carries its full ${img_bytes}-byte size"
 
 log "done — $(du -h "$out" | awk '{print $1}')"
 log ""
