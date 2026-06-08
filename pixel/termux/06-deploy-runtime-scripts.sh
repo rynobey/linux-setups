@@ -191,10 +191,10 @@ export PUBUNTU_SSH_USER="$PUBUNTU_SSH_USER"
 # loads Android's PowerVR GLES blob → hardware-accelerated GL for Termux
 # clients. This export is now LOAD-BEARING: as of Mesa 26.0.6 (2026-06),
 # with NO gallium driver selected libgallium abort()s during GL-context
-# init, so *every* GL/GTK app (xfce4-terminal, firefox, …) crashes on
-# launch — it no longer silently falls back to llvmpipe. Set it explicitly
+# init, so every GL/GTK app (xfce4-terminal, firefox, ...) crashes on
+# launch -- it no longer silently falls back to llvmpipe. Set it explicitly
 # (virpipe = HW via virgl; llvmpipe = software). Diagnose app crashes with
-# `adb logcat -b crash` (tombstone names the bad .so). start-x11.sh ensures
+# "adb logcat -b crash" (tombstone names the bad .so). start-x11.sh ensures
 # the daemon is running on this socket and pins this driver as a fallback.
 export GALLIUM_DRIVER=virpipe
 export LIBGL_ALWAYS_SOFTWARE=0
