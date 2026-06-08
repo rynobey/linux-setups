@@ -105,6 +105,14 @@ warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 # Env knobs:
 #   START_PULSE             default 1   include pulseaudio (start-x11 uses it)
 #   INSTALL_TERMUX_FIREFOX  default 0   ALSO install Termux-native firefox.
+#   SKIP_PKG                default 0   skip phase [0/4] entirely (no apt/network) —
+#                                       use when packages are already installed and
+#                                       you only want to redeploy the config/scripts.
+#                                       (apt update against a slow/dead mirror is the
+#                                        usual cause of this script "stalling".)
+if [ "${SKIP_PKG:-0}" = "1" ]; then
+    log "[0/4] SKIP_PKG=1 — skipping prereq install (assuming packages already present)"
+else
 log "[0/4] installing Termux-side prereqs (X11, Mesa, Vulkan loader, virgl, socat, xorg-xauth, i3, ...)"
 
 # Make apt non-interactive end-to-end. Termux's `pkg` wraps apt; apt honours
@@ -153,6 +161,7 @@ for p in $TERMUX_PKGS; do
         warn "    pkg install $p failed (continuing — re-run later or install by hand)"
     fi
 done
+fi
 
 write_with_backup() {
     local path="$1"
