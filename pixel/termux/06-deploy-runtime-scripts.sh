@@ -1809,12 +1809,34 @@ if [ -x "$HOME/.local/bin/desktop-apply" ]; then
     "$HOME/.local/bin/desktop-apply" || warn "desktop-apply failed (continuing)"
 fi
 
+# ---- sky.py: Tether WM home-screen almanac --------------------------------
+# The WM's home screen runs this (wm.json execTarget → python ~/storage/shared/tether/sky.py).
+# Single source of truth is the repo copy (pixel/termux/sky.py); we copy it to /sdcard/tether/
+# so both Termux and the WM (All-files access) see the same file. When this deploy script is run
+# standalone (curl|bash, no checkout) the sibling source isn't present, so we skip gracefully.
+log "[+] deploying sky.py (Tether WM home-screen almanac)"
+sky_src="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/sky.py" || sky_src=""
+sky_dst="$HOME/storage/shared/tether"
+if [ -n "$sky_src" ] && [ -f "$sky_src" ]; then
+    if mkdir -p "$sky_dst" 2>/dev/null && cp "$sky_src" "$sky_dst/sky.py" 2>/dev/null; then
+        log "    → $sky_dst/sky.py"
+        # sky.py's only non-stdlib dependency is 'ephem' (offline astronomy); best-effort install.
+        command -v python >/dev/null 2>&1 || pkg install -y python >/dev/null 2>&1 || warn "    python missing — sky.py needs it"
+        python -c "import ephem" >/dev/null 2>&1 || pip install ephem >/dev/null 2>&1 || warn "    install 'ephem' by hand: pip install ephem"
+    else
+        warn "    couldn't write $sky_dst (run termux-setup-storage first?) — skipped sky.py"
+    fi
+else
+    log "    (no sky.py beside this script — skipped; run from the cloned repo to deploy it)"
+fi
+
 log ""
 log "Deployed runtime scripts to \$HOME:"
 log "    ~/start-x11.sh                 bring up Termux:X11 + xauth + cookie + bridge + i3"
 log "    ~/stop-x11.sh                  tear down i3 + display stack"
 log "    ~/sync-x11-cookie.sh           (re)deploy xauth cookie to pubuntu"
 log "    ~/runtime.env                  shared config (DISPLAY_NUM, USE_XAUTH, I3_MOD, ...)"
+log "    /sdcard/tether/sky.py          Tether WM home-screen almanac (8-bit clock + sun/moon/planets)"
 log "    ~/.config/i3/config            i3 keybinds + workspaces (mod=$I3_MOD)"
 log "    ~/.local/bin/i3-cheatsheet     \$mod+slash popup of all keybinds"
 log "    ~/.config/xfce4/terminal/      no-Alt-menu terminal defaults"

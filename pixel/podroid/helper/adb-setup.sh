@@ -131,6 +131,18 @@ for pkg in com.excp.podroid com.excp.podroid.debug; do
     fi
 done
 
+# ---- Termux:API location (termux-location → sky-almanac GPS) ---------------
+# `termux-location` runs through the Termux:API app; the location permission is
+# held by THAT package (com.termux.api), not Termux itself. Skipped automatically
+# if Termux:API isn't installed (sky.py then falls back to IP geolocation).
+if pkg_exists "com.termux.api"; then
+    adb shell pm grant com.termux.api android.permission.ACCESS_COARSE_LOCATION 2>/dev/null || true
+    adb shell pm grant com.termux.api android.permission.ACCESS_FINE_LOCATION 2>/dev/null || true
+    log "[+] Termux:API location granted (termux-location / sky-almanac GPS)"
+else
+    log "[+] Termux:API not installed — skip location grant (sky.py uses IP geo)"
+fi
+
 # ---- 4. deviceidle whitelist (Doze-kill prevention overnight) -------------
 # Without this, Android's Doze evicts the cached Podroid app while the phone
 # sits idle overnight — taking the VM with it. The whitelist tells Doze to
